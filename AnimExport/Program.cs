@@ -11,35 +11,43 @@ using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Versions;
+using CUE4Parse.Utils;
 using Newtonsoft.Json;
 
 public class Progam
 {
     // SET THESE FOR YOUR GAME
-
     private const string _pakDir = @"C:\Program Files (x86)\Steam\steamapps\common\Deep Rock Galactic\FSD\Content\Paks";
     private const string _aesKey = ""; // If your game does not have an AES key, leave this empty
     private const string _mapping = ""; // If your game does not need a mappings file, leave this empty
-    private const EGame  _version = EGame.GAME_UE4_27;
+    private const EGame  _version = EGame.GAME_UE4_27; // Check if your game has a custom version, as some do
     private const bool   _exportMaterials = false; // This needs to be false if generating for CAS+UEAT
-
-    private const bool   _useInternalName = true; // Sometimes package path is not set properly meaning paths are not synced, so if it isn't, set to true 
+    private const bool   _useInternalName = true; // Sometimes package path is not set properly meaning paths are not synced, so if it isn't, set to true
     private const string _outputDir = @"F:\DRG Modding\DRGPacker\JSON\Animation Stuff\";
     private const bool   _replaceFiles = false;
     private const bool   _printSuccess = true; // Once you've verified this works, set this to false to reduce console spam
-
-    /*
-    private const string _pakDir = @"D:\STEAM GAMES\steamapps\common\AliensDarkDescent\ASF\Content\Paks";
-    private const string _aesKey = ""; // If your game does not have an AES key, leave this empty
-    private const string _mapping = ""; // If your game does not need a mappings file, leave this empty
-    private const EGame  _version = EGame.GAME_UE4_27;
-    private const bool   _exportMaterials = false;
     
-    private const bool   _useInternalName = false; // Sometimes package path is not set properly meaning paths are not synced, so if it isn't, set to true  
-    private const string _outputDir = @"F:\Other Modding\AliensDD\FBX\";
-    private const bool   _printSuccess = true; // Once you've verified this works, set this to false to reduce console spam
-    */
-
+    /*
+     * Some games (e.g. Valorant) have a stripped AssetRegistry file so set this to true if yours does
+     * You'll know if it has a stripped AR if this being false doesn't export any files
+     * Warning: Always replaces existing files regardless of _replaceFiles
+     * Warning: Has no support for broken RefPose animation additives
+     */
+    private const bool   _hasStrippedAssetRegistry = false; 
+    
+    /*
+     * Folder names for each item type where:
+     * [0] = AnimSeqs
+     * [1] = AnimMonts
+     * [2] = AnimComps
+     * [3] = SKMs
+     * [4] = SMs
+     * [5] = SKs
+     * You can change this as you see fit (such as to the same names like all anims to "Anims")
+     */
+    private static readonly List<string> _folderNames = new() { "AnimSeqs", "AnimMonts", "AnimComps", "SKMs", "SMs", "SKs" };
+    
+    // DO NOT TOUCH ANYTHING BELOW THIS LINE
     private static List<string> animAdditives = new();
 
     static async Task Main(string[] args)
@@ -50,53 +58,86 @@ public class Progam
         provider.Initialize();
         if (!string.IsNullOrEmpty(_aesKey)) await provider.SubmitKeyAsync(new FGuid(), new FAesKey(_aesKey));
         await provider.MountAsync();
-
-        List<FAssetData> assets = new();
-        var assetArchive =
-            await provider.TryCreateReaderAsync(Path.Join(provider.InternalGameName, "AssetRegistry.bin"));
-        if (assetArchive is not null)
-            assets.AddRange(new FAssetRegistryState(assetArchive).PreallocatedAssetDataBuffers);
-
-        foreach (var asset in assets)
+        
+        if (_hasStrippedAssetRegistry)
         {
-            if (!asset.PackagePath.ToString().StartsWith("/Game")) continue;
-
-            // SET THIS FOR ANY ADDITIVE ASSETS THAT ARE FAILING TO EXPORT DUE TO INCORRECT REF POSE
-            if (asset.PackageName.ToString() == @"/Game/Enemies/HydraWeed/Assets/ANIM_HydraWeed_Heart_Damaged_Additive")
+            var folderAssets = provider.Files.Values.Where(file =>
+                file.Path.StartsWith(provider.InternalGameName + "/Content/", StringComparison.OrdinalIgnoreCase));
+            foreach (var asset in folderAssets)
             {
-                Export<UAnimSequence>(provider, "AnimSeqs", asset, assets[assets.IndexOf(asset) + 1]);
-                continue;
-            }
-
-            switch (asset.AssetClass.Text)
-            {
-                case "Skeleton":
-                    Export<USkeleton>(provider, "SKs", asset);
-                    break;
-                case "AnimSequence":
-                    Export<UAnimSequence>(provider, "AnimSeqs", asset);
-                    break;
-                case "AnimMontage":
-                    Export<UAnimMontage>(provider, "AnimMonts", asset);
-                    break;
-                case "AnimComposite":
-                    Export<UAnimComposite>(provider, "AnimComps", asset);
-                    break;
-                case "SkeletalMesh":
-                    Export<USkeletalMesh>(provider, "SKMs", asset);
-                    break;
-                case "StaticMesh":
-                    Export<UStaticMesh>(provider, "SMs", asset);
-                    break;
+                if (provider.TryLoadObject(asset.PathWithoutExtension, out UAnimSequence seq)) ExportFromGameFiles(seq, _folderNames[0]);
+                if (provider.TryLoadObject(asset.PathWithoutExtension, out UAnimMontage mont)) ExportFromGameFiles(mont, _folderNames[1]);
+                if (provider.TryLoadObject(asset.PathWithoutExtension, out UAnimComposite comp)) ExportFromGameFiles(comp, _folderNames[2]);
+                if (provider.TryLoadObject(asset.PathWithoutExtension, out USkeletalMesh skm)) ExportFromGameFiles(skm, _folderNames[3]);
+                if (provider.TryLoadObject(asset.PathWithoutExtension, out UStaticMesh sm)) ExportFromGameFiles(sm, _folderNames[4]);
+                if (provider.TryLoadObject(asset.PathWithoutExtension, out USkeleton sk)) ExportFromGameFiles(sk, _folderNames[5]);
             }
         }
+        else
+        {
+            List<FAssetData> assets = new();
+            var assetArchive = await provider.TryCreateReaderAsync(Path.Join(provider.InternalGameName, "AssetRegistry.bin"));
+            if (assetArchive is not null) assets.AddRange(new FAssetRegistryState(assetArchive).PreallocatedAssetDataBuffers);
 
+            foreach (var asset in assets)
+            {
+                if (!asset.PackagePath.ToString().StartsWith("/Game")) continue;
+
+                // SET THIS FOR ANY ADDITIVE ASSETS THAT ARE FAILING TO EXPORT DUE TO INCORRECT REF POSE
+                if (asset.PackageName.ToString() == @"/Game/Enemies/HydraWeed/Assets/ANIM_HydraWeed_Heart_Damaged_Additive")
+                {
+                    ExportFromAssetData<UAnimSequence>(provider, "AnimSeqs", asset, assets[assets.IndexOf(asset) + 1]);
+                    continue;
+                }
+
+                switch (asset.AssetClass.Text)
+                {
+                    case "AnimSequence":
+                        ExportFromAssetData<UAnimSequence>(provider, _folderNames[0], asset);
+                        break;
+                    case "AnimMontage":
+                        ExportFromAssetData<UAnimMontage>(provider, _folderNames[1], asset);
+                        break;
+                    case "AnimComposite":
+                        ExportFromAssetData<UAnimComposite>(provider, _folderNames[2], asset);
+                        break;
+                    case "SkeletalMesh":
+                        ExportFromAssetData<USkeletalMesh>(provider, _folderNames[3], asset);
+                        break;
+                    case "StaticMesh":
+                        ExportFromAssetData<UStaticMesh>(provider, _folderNames[4], asset);
+                        break;
+                    case "Skeleton":
+                        ExportFromAssetData<USkeleton>(provider, _folderNames[5], asset);
+                        break;
+                }
+            }
+        }
+        
         CreateBlenderSKs(provider, "SKs");
 
         PrintAnimAdditives();
     }
 
-    private static void Export<T>(DefaultFileProvider provider, string outFolder,
+    private static async void ExportFromGameFiles<T>(T asset, string outFolder) where T : UObject
+    {
+        try
+        {
+            var options = new ExporterOptions { ExportMaterials = _exportMaterials };
+            var exporter = new Exporter(asset, options);
+            if (!Directory.Exists(Path.Join(_outputDir, outFolder))) Directory.CreateDirectory(Path.Join(_outputDir, outFolder));
+            exporter.TryWriteToDir(new DirectoryInfo(Path.Join(_outputDir, outFolder)), out _, out var fileName);
+            var json = JsonConvert.SerializeObject(asset, Formatting.Indented);
+            await File.WriteAllTextAsync(fileName.SubstringBefore(".") + ".json", json);
+            if (_printSuccess) Console.WriteLine(fileName);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+        }
+    }
+
+    private static void ExportFromAssetData<T>(DefaultFileProvider provider, string outFolder,
         FAssetData asset, FAssetData? extraAsset = null) where T : UObject
     {
         var contentDir = _useInternalName ? Path.Join(provider.InternalGameName.ToUpper(), "Content") : "Game";
@@ -116,7 +157,6 @@ public class Progam
         if (objPath.Length > 1 && objName[0] != objName[1]) return;
 
         var refObject = provider.LoadObject<T>(path);
-
         if (refObject is UAnimSequence animSeq && animSeq.AdditiveAnimType != EAdditiveAnimationType.AAT_None)
         {
             animAdditives.Add(animSeq.GetPathName().Split(".")[0]);
@@ -128,10 +168,11 @@ public class Progam
             var tAnimSeqDir = extraAsset.PackagePath.ToString().Remove(0, 5);
             var tPath = Path.Join(contentDir, tAnimSeqDir, tAnimSeqName).Replace(Path.DirectorySeparatorChar, '/');
             var addUAnimSequence = provider.LoadObject<UAnimSequence>(tPath);
-            var refUAnimSequence = refObject as UAnimSequence;
-            //refUAnimSequence.RefPoseSeq = addUAnimSequence.RefPoseSeq;
-            refUAnimSequence.RefPoseSeq = new ResolvedLoadedObject(addUAnimSequence);
-            refObject = refUAnimSequence as T;
+            if (refObject is UAnimSequence refUAnimSequence)
+            {
+                refUAnimSequence.RefPoseSeq = new ResolvedLoadedObject(addUAnimSequence);
+                refObject = refUAnimSequence as T;
+            }
         }
 
         try
@@ -149,8 +190,8 @@ public class Progam
 
         try
         {
-            var options = new ExporterOptions() { ExportMaterials = _exportMaterials };
-            var exporter = new Exporter(refObject, options);
+            var options = new ExporterOptions { ExportMaterials = _exportMaterials };
+            var exporter = new Exporter(refObject!, options);
             exporter.TryWriteToDir(new DirectoryInfo(Path.Join(_outputDir, outFolder)), out _, out var fileName);
             if (_printSuccess) Console.WriteLine(fileName);
         }
@@ -165,6 +206,7 @@ public class Progam
     {
         var blenderDir = Path.Join(_outputDir, outFolder, "Blender");
         var contentDir = _useInternalName ? Path.Join(provider.InternalGameName.ToUpper(), "Content") : "Game";
+        if (!Directory.Exists(Path.Join(_outputDir, outFolder, contentDir))) return;
         if (!Directory.Exists(blenderDir)) Directory.CreateDirectory(blenderDir);
         foreach (var file in Directory.GetFiles(Path.Join(_outputDir, outFolder, contentDir),
                      "*.*", SearchOption.AllDirectories))
