@@ -21,7 +21,7 @@ public class Progam
     private const string _aesKey = ""; // If your game does not have an AES key, leave this empty
     private const string _mapping = ""; // If your game does not need a mappings file, leave this empty
     private const EGame  _version = EGame.GAME_UE4_27;
-    private const bool   _exportMaterials = false;
+    private const bool   _exportMaterials = false; // This needs to be false if generating for CAS+UEAT
 
     private const bool   _useInternalName = true; // Sometimes package path is not set properly meaning paths are not synced, so if it isn't, set to true 
     private const string _outputDir = @"F:\DRG Modding\DRGPacker\JSON\Animation Stuff\";

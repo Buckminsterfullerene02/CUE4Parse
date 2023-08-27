@@ -131,7 +131,7 @@ namespace CUE4Parse_Conversion.Meshes
                 switch (Options.MeshFormat)
                 {
                     case EMeshFormat.ActorX:
-                        ext = convertedMesh.LODs[i].NumVerts > 65536 ? "pskx" : "psk";
+                        ext = "psk";
                         ExportSkeletalMeshLod(lod, convertedMesh.RefSkeleton, Ar, materialExports,
                             Options.ExportMorphTargets ? originalMesh.MorphTargets : null,
                             totalSockets.ToArray(), lodIndex);
