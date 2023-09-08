@@ -13,6 +13,9 @@ using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse.Utils;
 using Newtonsoft.Json;
+using System.CommandLine;
+using System.CommandLine.Builder;
+using System.CommandLine.Parsing;
 
 public class Progam
 {
@@ -45,12 +48,19 @@ public class Progam
      * [5] = SKs
      * You can change this as you see fit (such as to the same names like all anims to "Anims")
      */
-    private static readonly List<string> _folderNames = new() { "AnimSeqs", "AnimMonts", "AnimComps", "SKMs", "SMs", "SKs" };
+    private static readonly List<string> _folderNames = new() { "Anims", "Anims", "Anims", "SKMs", "SMs", "SKs" };
     
     // DO NOT TOUCH ANYTHING BELOW THIS LINE
     private static List<string> animAdditives = new();
 
     static async Task Main(string[] args)
+    {
+        DefaultFileProvider provider = await ExportAssets(_hasStrippedAssetRegistry);
+        CreateBlenderSKs(provider, _folderNames[5]);
+        PrintAnimAdditives();
+    }
+
+    private static async Task<DefaultFileProvider> ExportAssets(bool hasStrippedAR = false)
     {
         var provider = new DefaultFileProvider(_pakDir, SearchOption.TopDirectoryOnly, true,
             new VersionContainer(_version));
@@ -59,7 +69,7 @@ public class Progam
         if (!string.IsNullOrEmpty(_aesKey)) await provider.SubmitKeyAsync(new FGuid(), new FAesKey(_aesKey));
         await provider.MountAsync();
         
-        if (_hasStrippedAssetRegistry)
+        if (hasStrippedAR)
         {
             var folderAssets = provider.Files.Values.Where(file =>
                 file.Path.StartsWith(provider.InternalGameName + "/Content/", StringComparison.OrdinalIgnoreCase));
@@ -82,11 +92,11 @@ public class Progam
             foreach (var asset in assets)
             {
                 if (!asset.PackagePath.ToString().StartsWith("/Game")) continue;
-
+                
                 // SET THIS FOR ANY ADDITIVE ASSETS THAT ARE FAILING TO EXPORT DUE TO INCORRECT REF POSE
                 if (asset.PackageName.ToString() == @"/Game/Enemies/HydraWeed/Assets/ANIM_HydraWeed_Heart_Damaged_Additive")
                 {
-                    ExportFromAssetData<UAnimSequence>(provider, "AnimSeqs", asset, assets[assets.IndexOf(asset) + 1]);
+                    ExportFromAssetData<UAnimSequence>(provider, _folderNames[0], asset, assets[assets.IndexOf(asset) + 1]);
                     continue;
                 }
 
@@ -113,10 +123,8 @@ public class Progam
                 }
             }
         }
-        
-        CreateBlenderSKs(provider, "SKs");
 
-        PrintAnimAdditives();
+        return provider;
     }
 
     private static async void ExportFromGameFiles<T>(T asset, string outFolder) where T : UObject
@@ -148,13 +156,13 @@ public class Progam
 
         if (File.Exists(Path.Join(_outputDir, outFolder, path) + ".json") && !_replaceFiles)
         {
-            Console.WriteLine("Skipping " + Path.Join(_outputDir, outFolder, path));
+            if (_printSuccess) Console.WriteLine("Skipping " + Path.Join(_outputDir, outFolder, path));
             return;
         }
 
         var objPath = asset.ObjectPath.Split("/");
         var objName = objPath[^1].Split(".");
-        if (objPath.Length > 1 && objName[0] != objName[1]) return;
+        if (objPath.Length > 1 && !string.Equals(objName[0], objName[1], StringComparison.CurrentCultureIgnoreCase)) return;
 
         var refObject = provider.LoadObject<T>(path);
         if (refObject is UAnimSequence animSeq && animSeq.AdditiveAnimType != EAdditiveAnimationType.AAT_None)
