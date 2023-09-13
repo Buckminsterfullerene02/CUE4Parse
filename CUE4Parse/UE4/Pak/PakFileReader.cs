@@ -22,7 +22,6 @@ namespace CUE4Parse.UE4.Pak
     public class PakFileReader : AbstractAesVfsReader
     {
         public readonly FArchive Ar;
-
         public readonly FPakInfo Info;
 
         public override string MountPoint { get; protected set; }
@@ -30,7 +29,6 @@ namespace CUE4Parse.UE4.Pak
 
         public override bool HasDirectoryIndex => true;
         public override FGuid EncryptionKeyGuid => Info.EncryptionKeyGuid;
-
         public override bool IsEncrypted => Info.EncryptedIndex;
 
         public PakFileReader(FArchive Ar) : base(Ar.Name, Ar.Versions)
@@ -40,7 +38,8 @@ namespace CUE4Parse.UE4.Pak
             Info = FPakInfo.ReadFPakInfo(Ar);
             if (Info.Version > PakFile_Version_Latest &&
                 Ar.Game != EGame.GAME_TowerOfFantasy && Ar.Game != EGame.GAME_MeetYourMaker &&
-                Ar.Game != EGame.GAME_Snowbreak && Ar.Game != EGame.GAME_TheDivisionResurgence) // These games use version >= 12 to indicate their custom formats
+                Ar.Game != EGame.GAME_Snowbreak && Ar.Game != EGame.GAME_TheDivisionResurgence &&
+                Ar.Game != EGame.GAME_TorchlightInfinite) // These games use version >= 12 to indicate their custom formats
             {
                 log.Warning($"Pak file \"{Name}\" has unsupported version {(int) Info.Version}");
             }
