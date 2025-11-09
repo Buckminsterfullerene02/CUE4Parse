@@ -1,7 +1,11 @@
-﻿using System;
+using System;
+using System.IO;
 using CUE4Parse.Compression;
+using CUE4Parse.Encryption.Aes;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Readers;
+using CUE4Parse.UE4.Versions;
+using CUE4Parse.Utils;
 using Serilog;
 
 namespace CUE4Parse.UE4.IO.Objects
@@ -32,7 +36,7 @@ namespace CUE4Parse.UE4.IO.Objects
         {
             var streamBuffer = new byte[Ar.Length];
             Ar.Read(streamBuffer, 0, streamBuffer.Length);
-            using var archive = new FByteArchive(Ar.Name, streamBuffer);
+            using var archive = new FByteArchive(Ar.Name, streamBuffer, Ar.Versions);
 
             // Header
             Header = new FIoStoreTocHeader(archive);
@@ -51,6 +55,18 @@ namespace CUE4Parse.UE4.IO.Objects
             for (int i = 0; i < Header.TocEntryCount; i++)
             {
                 ChunkOffsetLengths[i] = new FIoOffsetAndLength(archive);
+            }
+
+            if (Ar.Game == EGame.GAME_NeedForSpeedMobile && !Ar.Name.EndsWith("global.utoc"))
+            {
+                archive.Position -= Header.TocEntryCount * 10;
+                var len = ((int)Header.TocEntryCount * 10).Align(16);
+                var data = archive.ReadArray<byte>(len).Decrypt(new FAesKey("0xB71C91417A3790F27BE3852C6775EBF39D88BEABC0CDDCF721F7B2F0CA69FA12"));
+                using var chunksAr = new FByteArchive("ChunkOffsetLengths", data);
+                for (int i = 0; i < Header.TocEntryCount; i++)
+                {
+                    ChunkOffsetLengths[i] = new FIoOffsetAndLength(chunksAr);
+                }
             }
 
             // Chunk perfect hash map
@@ -75,10 +91,12 @@ namespace CUE4Parse.UE4.IO.Objects
             }
 
             // Compression blocks
+            var isFragPunk = archive.Game == EGame.GAME_FragPunk;
             CompressionBlocks = new FIoStoreTocCompressedBlockEntry[Header.TocCompressedBlockEntryCount];
             for (int i = 0; i < Header.TocCompressedBlockEntryCount; i++)
             {
                 CompressionBlocks[i] = new FIoStoreTocCompressedBlockEntry(archive);
+                if (isFragPunk) archive.Position += 4;
             }
 
             // Compression methods
@@ -129,10 +147,20 @@ namespace CUE4Parse.UE4.IO.Objects
             // Meta
             if (readOptions.HasFlag(EIoStoreTocReadOptions.ReadTocMeta))
             {
+                var replacedIoChunkHashWithIoHash = Header.Version >= EIoStoreTocVersion.ReplaceIoChunkHashWithIoHash;
                 ChunkMetas = new FIoStoreTocEntryMeta[Header.TocEntryCount];
                 for (int i = 0; i < Header.TocEntryCount; i++)
                 {
-                    ChunkMetas[i] = new FIoStoreTocEntryMeta(archive);
+                    ChunkMetas[i] = new FIoStoreTocEntryMeta(archive, replacedIoChunkHashWithIoHash);
+                }
+
+                // OnDemand
+                if (Header.Version == EIoStoreTocVersion.OnDemandMetaData && Header.ContainerFlags.HasFlag(EIoContainerFlags.OnDemand))
+                {
+                    // FIoStoreTocOnDemandChunkMeta (FIoHash) OnDemandChunkMeta;
+                    Ar.Position += Header.TocEntryCount * FSHAHash.SIZE;
+                    // FIoStoreTocOnDemandCompressedBlockMeta (FIoHash) OnDemandCompressedBlockMeta;
+                    Ar.Position += Header.TocCompressedBlockEntryCount * FSHAHash.SIZE;
                 }
             }
         }

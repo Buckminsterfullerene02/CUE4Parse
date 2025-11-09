@@ -1,4 +1,5 @@
-﻿using CUE4Parse.UE4.Objects.Core.Math;
+﻿using System;
+using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.Meshes;
 using CUE4Parse.UE4.Objects.RenderCore;
 
@@ -6,7 +7,7 @@ namespace CUE4Parse_Conversion.Meshes.PSK
 {
     public class CStaticMeshLod : CBaseMeshLod
     {
-        public CMeshVertex[] Verts;
+        public CMeshVertex[]? Verts;
 
         public void AllocateVerts(int count)
         {
@@ -25,6 +26,17 @@ namespace CUE4Parse_Conversion.Meshes.PSK
             if (HasNormals) return;
             // BuildNormalsCommon(Verts, Indices);
             HasNormals = true;
+        }
+
+        public override void Dispose()
+        {
+            base.Dispose();
+            
+            if (Verts is null)
+                return;
+            
+            Array.Clear(Verts);
+            Verts = null;
         }
     }
 }

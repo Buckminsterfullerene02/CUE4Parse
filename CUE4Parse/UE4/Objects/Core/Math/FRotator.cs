@@ -1,4 +1,5 @@
-﻿using System.Numerics;
+using System;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using CUE4Parse.UE4.Readers;
 using CUE4Parse.UE4.Versions;
@@ -12,7 +13,7 @@ namespace CUE4Parse.UE4.Objects.Core.Math
      *
      * All rotation values are stored in degrees.
      */
-    public class FRotator : IUStruct
+    public struct FRotator : IUStruct, IEquatable<FRotator>
     {
         private const float KindaSmallNumber = 1e-4f;
 
@@ -45,18 +46,9 @@ namespace CUE4Parse.UE4.Objects.Core.Math
 
         public FRotator(FArchive Ar)
         {
-            if (Ar.Ver >= EUnrealEngineObjectUE5Version.LARGE_WORLD_COORDINATES)
-            {
-                Pitch = (float) Ar.Read<double>();
-                Yaw = (float) Ar.Read<double>();
-                Roll = (float) Ar.Read<double>();
-            }
-            else
-            {
-                Pitch = Ar.Read<float>();
-                Yaw = Ar.Read<float>();
-                Roll = Ar.Read<float>();
-            }
+            Pitch = Ar.ReadFReal();
+            Yaw = Ar.ReadFReal();
+            Roll = Ar.ReadFReal();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -179,28 +171,29 @@ namespace CUE4Parse.UE4.Objects.Core.Math
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool operator ==(FRotator? a, FRotator b) =>
-            a is not null && a.Pitch == b.Pitch && a.Yaw == b.Yaw && a.Roll == b.Roll;
+        public readonly bool Equals(FRotator r, float tolerance) => MathF.Abs(NormalizeAxis(Pitch - r.Pitch)) <= tolerance &&
+                                                                    MathF.Abs(NormalizeAxis(Yaw - r.Yaw)) <= tolerance &&
+                                                                    MathF.Abs(NormalizeAxis(Roll - r.Roll)) <= tolerance;
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool operator !=(FRotator? a, FRotator b) => !(a == b);
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool Equals(FRotator r, float tolerance = KindaSmallNumber) => System.Math.Abs(NormalizeAxis(Pitch - r.Pitch)) <= tolerance &&
-                                                           System.Math.Abs(NormalizeAxis(Yaw - r.Yaw)) <= tolerance &&
-                                                           System.Math.Abs(NormalizeAxis(Roll - r.Roll)) <= tolerance;
-
-        public void Serialize(FArchiveWriter Ar)
+        public void Serialize(FArchiveWriter Ar) 
         {
             Ar.Write(Pitch);
             Ar.Write(Yaw);
             Ar.Write(Roll);
         }
 
-        public override bool Equals(object? obj) => obj is FRotator other && Equals(other, 0f);
-
         public override string ToString() => $"P={Pitch} Y={Yaw} R={Roll}";
 
         public static implicit operator Vector3(FRotator r) => new(r.Pitch, r.Yaw, r.Roll);
+
+        public bool Equals(FRotator r) => Equals(r, KindaSmallNumber);
+
+        public override bool Equals(object? obj) => obj is FRotator other && Equals(other);
+
+        public override int GetHashCode() => HashCode.Combine(Pitch, Yaw, Roll);
+
+        public static bool operator ==(FRotator left, FRotator right) => left.Equals(right);
+
+        public static bool operator !=(FRotator left, FRotator right) => !left.Equals(right);
     }
 }

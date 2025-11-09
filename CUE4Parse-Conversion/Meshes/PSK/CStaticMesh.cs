@@ -1,25 +1,30 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using CUE4Parse.UE4.Objects.Core.Math;
 
 namespace CUE4Parse_Conversion.Meshes.PSK
 {
-    public class CStaticMesh
+    public class CStaticMesh : IDisposable
     {
-        public List<CStaticMeshLod> LODs;
+        public readonly List<CStaticMeshLod> LODs = [];
+        
         public FBox BoundingBox;
         public FSphere BoundingSphere;
 
-        public CStaticMesh()
-        {
-            LODs = new List<CStaticMeshLod>();
-        }
-        
         public void FinalizeMesh()
         {
             foreach (var levelOfDetail in LODs)
             {
                 levelOfDetail?.BuildNormals();
             }
+        }
+
+        public void Dispose()
+        {
+            foreach (var lod in LODs)
+                lod.Dispose();
+            
+            LODs.Clear();
         }
     }
 }

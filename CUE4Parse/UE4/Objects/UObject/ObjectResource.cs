@@ -1,9 +1,11 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Exceptions;
+using CUE4Parse.UE4.IO.Objects;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Versions;
 using Newtonsoft.Json;
@@ -20,7 +22,7 @@ namespace CUE4Parse.UE4.Objects.UObject
     /// array index will be (-FPackageIndex - 1)
     /// </summary>
     [JsonConverter(typeof(FPackageIndexConverter))]
-    public class FPackageIndex
+    public class FPackageIndex : IEquatable<FPackageIndex>
     {
         /// <summary>
         /// Values greater than zero indicate that this is an index into the ExportMap.  The
@@ -33,13 +35,35 @@ namespace CUE4Parse.UE4.Objects.UObject
 
         public readonly IPackage? Owner;
 
-        public ResolvedObject? ResolvedObject => Owner?.ResolvePackageIndex(this);
+        private WeakReference<ResolvedObject?>? _resolvedObject;
+        public ResolvedObject? ResolvedObject {
+            get {
+                var resolvedObject = _resolvedObject != null && _resolvedObject.TryGetTarget(out var target) ? target : null;
+                if (resolvedObject == null)
+                {
+                    if (Owner == null) return null;
+                    resolvedObject = Owner.ResolvePackageIndex(this);
+                    _resolvedObject = new(resolvedObject);
+                }
+                return resolvedObject;
+            }
+        }
+
+        public ResolvedObject? ResolvedObjectNoCache {
+            get {
+                if (Owner == null) return null;
+                var resolvedObject = _resolvedObject != null && _resolvedObject.TryGetTarget(out var target) ? target : null;
+                if (resolvedObject != null) return resolvedObject;
+                return Owner.ResolvePackageIndex(this);
+            }
+        }
 
         public bool IsNull => Index == 0;
         public bool IsExport => Index > 0;
         public bool IsImport => Index < 0;
 
-        public string Name => ResolvedObject?.Name.Text ?? "None";
+        private string? _name;
+        public string Name => _name ?? (_name = ResolvedObject?.Name.Text ?? "None");
 
         public FPackageIndex(FAssetArchive Ar, int index)
         {
@@ -58,6 +82,12 @@ namespace CUE4Parse.UE4.Objects.UObject
             Index = Ar.Read<int>();
             Owner = Ar.Owner;
             Ar.Index += 4;
+        }
+
+        public FPackageIndex(IPackage owner, int index)
+        {
+            Index = index;
+            Owner = owner;
         }
 
         public FPackageIndex()
@@ -88,7 +118,7 @@ namespace CUE4Parse.UE4.Objects.UObject
         public T? Load<T>() where T : UExport => Owner?.FindObject(this)?.Value as T;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryLoad<T>(out T export) where T : UExport
+        public bool TryLoad<T>([MaybeNullWhen(false)] out T export) where T : UExport
         {
             if (!TryLoad(out var genericExport) || genericExport is not T cast)
             {
@@ -111,12 +141,12 @@ namespace CUE4Parse.UE4.Objects.UObject
         public UExport? Load() => ResolvedObject?.Load();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryLoad(out UExport? export)
+        public bool TryLoad([MaybeNullWhen(false)] out UExport export)
         {
             if (ResolvedObject != null)
                 return ResolvedObject.TryLoad(out export);
 
-            export = default;
+            export = null;
             return false;
         }
 
@@ -140,8 +170,19 @@ namespace CUE4Parse.UE4.Objects.UObject
 
             return null;
         }
-
         #endregion
+
+        public bool Equals(FPackageIndex? other)
+        {
+            if (other is null) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return Index == other.Index && Owner != null && Owner.Equals(other.Owner);
+        }
+
+        public override int GetHashCode()
+        {
+            return HashCode.Combine(Index, Owner);
+        }
     }
 
 
@@ -184,7 +225,8 @@ namespace CUE4Parse.UE4.Objects.UObject
         public int CreateBeforeSerializationDependencies;
         public int SerializationBeforeCreateDependencies;
         public int CreateBeforeCreateDependencies;
-        public Lazy<UExport> ExportObject;
+        public long ScriptSerializationStartOffset;
+        public long ScriptSerializationEndOffset;
 
         public string ClassName;
 
@@ -240,12 +282,35 @@ namespace CUE4Parse.UE4.Objects.UObject
                 CreateBeforeCreateDependencies = 0;
             }
 
+            if (!Ar.HasUnversionedProperties && Ar.Ver >= EUnrealEngineObjectUE5Version.SCRIPT_SERIALIZATION_OFFSET)
+            {
+                ScriptSerializationStartOffset = Ar.Read<long>();
+                ScriptSerializationEndOffset = Ar.Read<long>();
+            }
+            else
+            {
+                ScriptSerializationStartOffset = 0;
+                ScriptSerializationEndOffset = 0;
+            }
+
             ClassName = ClassIndex.Name;
         }
 
         public override string ToString()
         {
             return $"{ObjectName.Text} ({ClassIndex.Name})";
+        }
+
+        // TODO: Implement public export hash calculation
+        public ulong GetPublicExportHash()
+        {
+            return 0u;
+        }
+
+        // TODO: Implement global import index calculation
+        public FPackageObjectIndex GetGlobalImportIndex()
+        {
+            return new(0u);
         }
     }
 
@@ -276,6 +341,8 @@ namespace CUE4Parse.UE4.Objects.UObject
             {
                 PackageName = Ar.ReadFName();
             }
+
+            if (Ar.Game == EGame.GAME_RacingMaster) Ar.Position += 1;
 
             ImportOptional = Ar.Ver >= EUnrealEngineObjectUE5Version.OPTIONAL_RESOURCES && Ar.ReadBoolean();
         }

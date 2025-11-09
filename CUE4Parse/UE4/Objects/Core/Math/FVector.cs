@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -6,6 +6,7 @@ using CUE4Parse.UE4.Readers;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse.UE4.Writers;
 using CUE4Parse.Utils;
+using FixedMathSharp;
 
 namespace CUE4Parse.UE4.Objects.Core.Math
 {
@@ -13,7 +14,7 @@ namespace CUE4Parse.UE4.Objects.Core.Math
     /// USE Ar.Read<FVector> FOR FLOATS AND new FVector(Ar) FOR DOUBLES
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    public struct FVector : IUStruct
+    public struct FVector : IUStruct, IEquatable<FVector>
     {
         /// <summary>
         /// Allowed error for a normalized vector (against squared magnitude)
@@ -52,18 +53,9 @@ namespace CUE4Parse.UE4.Objects.Core.Math
 
         public FVector(FArchive Ar)
         {
-            if (Ar.Ver >= EUnrealEngineObjectUE5Version.LARGE_WORLD_COORDINATES)
-            {
-                X = (float) Ar.Read<double>();
-                Y = (float) Ar.Read<double>();
-                Z = (float) Ar.Read<double>();
-            }
-            else
-            {
-                X = Ar.Read<float>();
-                Y = Ar.Read<float>();
-                Z = Ar.Read<float>();
-            }
+            X = Ar.ReadFReal();
+            Y = Ar.ReadFReal();
+            Z = Ar.ReadFReal();
         }
 
         /// <summary>
@@ -174,16 +166,25 @@ namespace CUE4Parse.UE4.Objects.Core.Math
         public static FVector operator +(FVector a, FVector b) => new(a.X + b.X, a.Y + b.Y, a.Z + b.Z);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static FVector operator +(FVector a, FIntVector b) => new(a.X + b.X, a.Y + b.Y, a.Z + b.Z);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static FVector operator +(FVector a, float bias) => new(a.X + bias, a.Y + bias, a.Z + bias);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static FVector operator -(FVector a, FVector b) => new(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static FVector operator -(FVector a, FIntVector b) => new(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static FVector operator -(FVector a, float bias) => new(a.X - bias, a.Y - bias, a.Z - bias);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static FVector operator *(FVector a, FVector b) => new(a.X * b.X, a.Y * b.Y, a.Z * b.Z);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static FVector operator *(FVector a, FIntVector b) => new(a.X * b.X, a.Y * b.Y, a.Z * b.Z);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static FVector operator *(FVector a, float scale) => new(a.X * scale, a.Y * scale, a.Z * scale);
@@ -203,6 +204,9 @@ namespace CUE4Parse.UE4.Objects.Core.Math
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static FVector operator /(FVector a, FVector b) => new(a.X / b.X, a.Y / b.Y, a.Z / b.Z);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static FVector operator /(FVector a, FIntVector b) => new(a.X / b.X, a.Y / b.Y, a.Z / b.Z);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static FVector operator /(FVector a, float scale)
@@ -248,18 +252,9 @@ namespace CUE4Parse.UE4.Objects.Core.Math
             }
         }
 
-        public override bool Equals(object? obj) => obj is FVector other && Equals(other, 0f);
+        public readonly override bool Equals(object? obj) => obj is FVector other && Equals(other);
 
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                var hashCode = X.GetHashCode();
-                hashCode = (hashCode * 397) ^ Y.GetHashCode();
-                hashCode = (hashCode * 397) ^ Z.GetHashCode();
-                return hashCode;
-            }
-        }
+        public readonly override int GetHashCode() => HashCode.Combine(X, Y, Z);
 
         /// <summary>
         /// Check against another vector for equality, within specified error limits.
@@ -268,7 +263,14 @@ namespace CUE4Parse.UE4.Objects.Core.Math
         /// <param name="tolerance">Error tolerance.</param>
         /// <returns>true if the vectors are equal within tolerance limits, false otherwise.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool Equals(FVector v, float tolerance = UnrealMath.KindaSmallNumber) => MathF.Abs(X - v.X) <= tolerance && MathF.Abs(Y - v.Y) <= tolerance && MathF.Abs(Z - v.Z) <= tolerance;
+        public readonly bool Equals(FVector v, float tolerance) => MathF.Abs(X - v.X) <= tolerance && MathF.Abs(Y - v.Y) <= tolerance && MathF.Abs(Z - v.Z) <= tolerance;
+
+        /// <summary>
+        /// Check against another vector for equality, within specified error limits.
+        /// </summary>
+        /// <param name="v">The vector to check against.</param>
+        /// <returns>true if the vectors are equal within tolerance limits, false otherwise.</returns>
+        public readonly bool Equals(FVector v) => Equals(v, UnrealMath.KindaSmallNumber);
 
         /// <summary>
         /// Checks whether all components of this vector are the same, within a tolerance.
@@ -570,5 +572,6 @@ namespace CUE4Parse.UE4.Objects.Core.Math
         }
 
         public static implicit operator Vector3(FVector v) => new(v.X, v.Y, v.Z);
+        public static implicit operator FVector(Vector3d v) => new((float)v.x, (float)v.y, (float)v.z);
     }
 }

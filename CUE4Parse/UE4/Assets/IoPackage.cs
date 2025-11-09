@@ -2,8 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using CUE4Parse.FileProvider;
-using CUE4Parse.MappingsProvider;
+using CUE4Parse.FileProvider.Vfs;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Assets.Utils;
@@ -21,25 +20,39 @@ namespace CUE4Parse.UE4.Assets
     [SkipObjectRegistration]
     public sealed class IoPackage : AbstractUePackage
     {
-        public readonly IoGlobalData GlobalData;
+        private readonly IoGlobalData _globalData;
 
         public override FPackageFileSummary Summary { get; }
         public override FNameEntrySerialized[] NameMap { get; }
+        public override int ImportMapLength => ImportMap.Length;
+        public override int ExportMapLength => ExportMap.Length;
+
         public readonly ulong[]? ImportedPublicExportHashes;
         public readonly FPackageObjectIndex[] ImportMap;
         public readonly FExportMapEntry[] ExportMap;
         public readonly FBulkDataMapEntry[] BulkDataMap;
-
         public readonly Lazy<IoPackage?[]> ImportedPackages;
-        public override Lazy<UObject>[] ExportsLazy { get; }
-        public override bool IsFullyLoaded { get; }
+        public readonly Lazy<IPackage?[][]> ImportedPackagesAllVersions;
+
+        public IoPackage(FArchive uasset, FIoContainerHeader? containerHeader = null, FArchive? ubulk = null, FArchive? uptnl = null, IVfsFileProvider? provider = null)
+            : this(
+                uasset,
+                containerHeader,
+                ubulk != null ? new Lazy<FArchive?>(() => ubulk) : null,
+                uptnl != null ? new Lazy<FArchive?>(() => uptnl) : null,
+                provider)
+        { }
 
         public IoPackage(
-            FArchive uasset, IoGlobalData globalData, FIoContainerHeader? containerHeader = null,
-            Lazy<FArchive?>? ubulk = null, Lazy<FArchive?>? uptnl = null,
-            IFileProvider? provider = null, TypeMappings? mappings = null) : base(uasset.Name.SubstringBeforeLast('.'), provider, mappings)
+            FArchive uasset,
+            FIoContainerHeader? containerHeader = null,
+            Lazy<FArchive?>? ubulk = null,
+            Lazy<FArchive?>? uptnl = null,
+            IVfsFileProvider? provider = null)
+            : base(uasset.Name.SubstringBeforeLast('.'), provider)
         {
-            GlobalData = globalData;
+            _globalData = provider?.GlobalData ?? throw new ParserException("Found IoStore Package but global data is missing, can't serialize");
+
             var uassetAr = new FAssetArchive(uasset, this);
 
             FExportBundleHeader[]? exportBundleHeaders;
@@ -56,8 +69,11 @@ namespace CUE4Parse.UE4.Assets
                 {
                     PackageFlags = summary.PackageFlags,
                     TotalHeaderSize = summary.GraphDataOffset + (int) summary.HeaderSize,
+                    NameOffset = (int) uassetAr.Position,
                     ExportCount = (summary.ExportBundleEntriesOffset - summary.ExportMapOffset) / FExportMapEntry.Size,
-                    ImportCount = (summary.ExportMapOffset - summary.ImportMapOffset) / FPackageObjectIndex.Size
+                    ExportOffset = summary.ExportMapOffset,
+                    ImportCount = (summary.ExportMapOffset - summary.ImportMapOffset) / FPackageObjectIndex.Size,
+                    ImportOffset = summary.ImportMapOffset,
                 };
 
                 // Versioning info
@@ -76,6 +92,17 @@ namespace CUE4Parse.UE4.Assets
                 else
                 {
                     Summary.bUnversioned = true;
+                }
+
+                FZenPackageCellOffsets cellOffsets;
+                if (summary.bHasVersioningInfo == 0 && uassetAr.Ver >= EUnrealEngineObjectUE5Version.VERSE_CELLS)
+                {
+                    cellOffsets = uassetAr.Read<FZenPackageCellOffsets>();
+                }
+                else
+                {
+                    cellOffsets.CellImportMapOffset = summary.ExportBundleEntriesOffset;
+                    cellOffsets.CellExportMapOffset = summary.ExportBundleEntriesOffset;
                 }
 
                 // Name map
@@ -105,12 +132,20 @@ namespace CUE4Parse.UE4.Assets
                             Log.Warning("Couldn't find store entry for package {0}, its data will not be fully read", Name);
                         }
                     }
+
+                    // SoftPackageReferences = containerHeader.SoftPackageReferences.PackageIds;
                 }
 
-                BulkDataMap = Array.Empty<FBulkDataMapEntry>();
-                if (uassetAr.Ver >= EUnrealEngineObjectUE5Version.DATA_RESOURCES)
+                BulkDataMap = [];
+                if (uassetAr.Ver >= EUnrealEngineObjectUE5Version.DATA_RESOURCES || uassetAr.Game == EGame.GAME_TheFirstDescendant)
                 {
-                    var bulkDataMapSize = uassetAr.Read<ulong>();
+                    if (uassetAr.Game >= EGame.GAME_UE5_4)
+                    {
+                        var pad = uassetAr.Read<ulong>(); // pad
+                        _ = uassetAr.ReadArray<byte>((int) pad);
+                    }
+
+                    var bulkDataMapSize = uassetAr.Read<long>();
                     BulkDataMap = uassetAr.ReadArray<FBulkDataMapEntry>((int) (bulkDataMapSize / FBulkDataMapEntry.Size));
                 }
 
@@ -128,7 +163,7 @@ namespace CUE4Parse.UE4.Assets
                 ExportsLazy = new Lazy<UObject>[Summary.ExportCount];
 
                 // Export bundle entries
-                uassetAr.Position = summary.ExportBundleEntriesOffset;
+                uassetAr.Position = cellOffsets.CellImportMapOffset;
                 exportBundleEntries = uassetAr.ReadArray<FExportBundleEntry>(Summary.ExportCount * 2);
 
                 if (uassetAr.Game < EGame.GAME_UE5_3)
@@ -141,7 +176,7 @@ namespace CUE4Parse.UE4.Assets
                 }
                 else exportBundleHeaders = null;
 
-                importedPackageIds = storeEntry?.ImportedPackages ?? Array.Empty<FPackageId>();
+                importedPackageIds = storeEntry?.ImportedPackages ?? [];
 
                 cookedHeaderSize = (int) summary.CookedHeaderSize;
                 allExportDataOffset = (int) summary.HeaderSize;
@@ -155,8 +190,11 @@ namespace CUE4Parse.UE4.Assets
                     PackageFlags = summary.PackageFlags,
                     TotalHeaderSize = summary.GraphDataOffset + summary.GraphDataSize,
                     NameCount = summary.NameMapHashesSize / sizeof(ulong) - 1,
+                    NameOffset = summary.NameMapNamesOffset,
                     ExportCount = (summary.ExportBundlesOffset - summary.ExportMapOffset) / FExportMapEntry.Size,
+                    ExportOffset = summary.ExportMapOffset,
                     ImportCount = (summary.ExportMapOffset - summary.ImportMapOffset) / FPackageObjectIndex.Size,
+                    ImportOffset = summary.ImportMapOffset,
                     bUnversioned = true
                 };
 
@@ -187,7 +225,7 @@ namespace CUE4Parse.UE4.Assets
             }
 
             // Preload dependencies
-            ImportedPackages = new Lazy<IoPackage?[]>(provider != null ? () =>
+            ImportedPackages = new Lazy<IoPackage?[]>(() =>
             {
                 var packages = new IoPackage?[importedPackageIds.Length];
                 for (var i = 0; i < importedPackageIds.Length; i++)
@@ -195,14 +233,30 @@ namespace CUE4Parse.UE4.Assets
                     provider.TryLoadPackage(importedPackageIds[i], out packages[i]);
                 }
                 return packages;
-            } : Array.Empty<IoPackage?>);
+            });
+
+            ImportedPackagesAllVersions = new Lazy<IPackage?[][]>(() =>
+            {
+                var packages = new IPackage?[importedPackageIds.Length][];
+                for (var i = 0; i < importedPackageIds.Length; i++)
+                {
+                    var package = ImportedPackages.Value[i];
+                    if (package == null)
+                    {
+                        packages[i] = [];
+                        continue;
+                    }
+
+                    packages[i] = provider.TryLoadPackages(package.Name, out var packagesList) ? [.. packagesList] : [];
+                }
+                return packages;
+            });
+
+            if (!CanDeserialize) return;
 
             // Attach ubulk and uptnl
             if (ubulk != null) uassetAr.AddPayload(PayloadType.UBULK, Summary.BulkDataStartOffset, ubulk);
             if (uptnl != null) uassetAr.AddPayload(PayloadType.UPTNL, Summary.BulkDataStartOffset, uptnl);
-
-            if (HasFlags(EPackageFlags.PKG_UnversionedProperties) && mappings == null)
-                throw new ParserException("Package has unversioned properties but mapping file is missing, can't serialize");
 
             // Populate lazy exports
             int ProcessEntry(FExportBundleEntry entry, int pos, bool newPos)
@@ -214,9 +268,11 @@ namespace CUE4Parse.UE4.Assets
                 ExportsLazy[entry.LocalExportIndex] = new Lazy<UObject>(() =>
                 {
                     // Create
-                    var obj = ConstructObject(ResolveObjectIndex(export.ClassIndex)?.Object?.Value as UStruct);
+                    var clas = ResolveObjectIndex(export.ClassIndex);
+                    var struc = clas?.Object?.Value as UStruct;
+                    var obj = ConstructObject(struc, this, export.ObjectFlags);
                     obj.Name = CreateFNameFromMappedName(export.ObjectName).Text;
-                    obj.Outer = (ResolveObjectIndex(export.OuterIndex) as ResolvedExportObject)?.ExportObject.Value ?? this;
+                    obj.Outer = (ResolveObjectIndex(export.OuterIndex) as ResolvedExportObject)?.Object?.Value ?? this;
                     obj.Super = ResolveObjectIndex(export.SuperIndex) as ResolvedExportObject;
                     obj.Template = ResolveObjectIndex(export.TemplateIndex) as ResolvedExportObject;
                     obj.Flags |= export.ObjectFlags; // We give loaded objects the RF_WasLoaded flag in ConstructObject, so don't remove it again in here
@@ -254,12 +310,9 @@ namespace CUE4Parse.UE4.Assets
             IsFullyLoaded = true;
         }
 
-        public IoPackage(FArchive uasset, IoGlobalData globalData, FIoContainerHeader? containerHeader = null, FArchive? ubulk = null, FArchive? uptnl = null, IFileProvider? provider = null, TypeMappings? mappings = null)
-            : this(uasset, globalData, containerHeader, ubulk != null ? new Lazy<FArchive?>(() => ubulk) : null, uptnl != null ? new Lazy<FArchive?>(() => uptnl) : null, provider, mappings) { }
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private FName CreateFNameFromMappedName(FMappedName mappedName) =>
-            new(mappedName, mappedName.IsGlobal ? GlobalData.GlobalNameMap : NameMap);
+        public FName CreateFNameFromMappedName(FMappedName mappedName) =>
+            new(mappedName, mappedName.IsGlobal ? _globalData.GlobalNameMap : NameMap);
 
         private void LoadExportBundles(FArchive Ar, int graphDataSize, out FExportBundleHeader[] bundleHeadersArray, out FExportBundleEntry[] bundleEntriesArray)
         {
@@ -286,7 +339,7 @@ namespace CUE4Parse.UE4.Assets
         private FPackageId[] LoadGraphData(FArchive Ar)
         {
             var packageCount = Ar.Read<int>();
-            if (packageCount == 0) return Array.Empty<FPackageId>();
+            if (packageCount == 0) return [];
 
             var packageIds = new FPackageId[packageCount];
             for (var packageIndex = 0; packageIndex < packageCount; packageIndex++)
@@ -300,18 +353,17 @@ namespace CUE4Parse.UE4.Assets
             return packageIds;
         }
 
-        public override UObject? GetExportOrNull(string name, StringComparison comparisonType = StringComparison.Ordinal)
+        public override int GetExportIndex(string name, StringComparison comparisonType = StringComparison.Ordinal)
         {
             for (var i = 0; i < ExportMap.Length; i++)
             {
-                var export = ExportMap[i];
-                if (CreateFNameFromMappedName(export.ObjectName).Text.Equals(name, comparisonType))
+                if (CreateFNameFromMappedName(ExportMap[i].ObjectName).Text.Equals(name, comparisonType))
                 {
-                    return ExportsLazy[i].Value;
+                    return i;
                 }
             }
 
-            return null;
+            return -1;
         }
 
         public override ResolvedObject? ResolvePackageIndex(FPackageIndex? index)
@@ -339,13 +391,13 @@ namespace CUE4Parse.UE4.Assets
 
             if (index.IsScriptImport)
             {
-                if (GlobalData.ScriptObjectEntriesMap.TryGetValue(index, out var scriptObjectEntry))
+                if (_globalData.ScriptObjectEntriesMap.TryGetValue(index, out var scriptObjectEntry))
                 {
                     return new ResolvedScriptObject(scriptObjectEntry, this);
                 }
             }
 
-            if (index.IsPackageImport && Provider != null)
+            if (index.IsPackageImport)
             {
                 if (ImportedPublicExportHashes != null)
                 {
@@ -364,6 +416,34 @@ namespace CUE4Parse.UE4.Assets
                                 }
                             }
                         }
+
+                        // search all previous versions
+                        var importedPackagesAllVersions = ImportedPackagesAllVersions.Value;
+                        var packages = importedPackagesAllVersions[packageImportRef.ImportedPackageIndex];
+                        foreach (var asset in packages)
+                        {
+                            if (asset is IoPackage ioPackage)
+                            {
+                                for (int exportIndex = 0; exportIndex < ioPackage.ExportMap.Length; ++exportIndex)
+                                {
+                                    if (ioPackage.ExportMap[exportIndex].PublicExportHash == ImportedPublicExportHashes[packageImportRef.ImportedPublicExportHashIndex])
+                                    {
+                                        return new ResolvedExportObject(exportIndex, ioPackage);
+                                    }
+                                }
+                            }
+                            else if (asset is Package package)
+                            {
+                                Log.Information("Searching Pak package {0} for PublicExportHash 0x{1:X}", package.Name, ImportedPublicExportHashes[packageImportRef.ImportedPublicExportHashIndex]);
+                                for (int exportIndex = 0; exportIndex < package.ExportMap.Length; ++exportIndex)
+                                {
+                                    if (package.ExportMap[exportIndex].GetPublicExportHash() == ImportedPublicExportHashes[packageImportRef.ImportedPublicExportHashIndex])
+                                    {
+                                        return new ResolvedPakExportObject(exportIndex, package);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 else
@@ -379,6 +459,34 @@ namespace CUE4Parse.UE4.Assets
                             }
                         }
                     }
+
+                    // search all previous versions
+                    foreach (var packages in ImportedPackagesAllVersions.Value)
+                    {
+                        foreach (var asset in packages)
+                        {
+                            if (asset is IoPackage ioPackage)
+                            {
+                                for (int exportIndex = 0; exportIndex < ioPackage.ExportMap.Length; ++exportIndex)
+                                {
+                                    if (ioPackage.ExportMap[exportIndex].GlobalImportIndex == index)
+                                    {
+                                        return new ResolvedExportObject(exportIndex, ioPackage);
+                                    }
+                                }
+                            }
+                            else if (asset is Package package)
+                            {
+                                for (int exportIndex = 0; exportIndex < package.ExportMap.Length; ++exportIndex)
+                                {
+                                    if (package.ExportMap[exportIndex].GetGlobalImportIndex() == index)
+                                    {
+                                        return new ResolvedPakExportObject(exportIndex, package);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -390,23 +498,35 @@ namespace CUE4Parse.UE4.Assets
             return null;
         }
 
+        private class ResolvedPakExportObject : ResolvedObject
+        {
+            private readonly FObjectExport _export;
+
+            public ResolvedPakExportObject(int exportIndex, Package package) : base(package, exportIndex)
+            {
+                _export = package.ExportMap[exportIndex];
+            }
+
+            public override FName Name => _export?.ObjectName ?? "None";
+            public override ResolvedObject Outer => Package.ResolvePackageIndex(_export.OuterIndex) ?? new ResolvedLoadedObject((UObject) Package);
+            public override ResolvedObject? Class => Package.ResolvePackageIndex(_export.ClassIndex);
+            public override ResolvedObject? Super => Package.ResolvePackageIndex(_export.SuperIndex);
+        }
+
         private class ResolvedExportObject : ResolvedObject
         {
             public FExportMapEntry ExportMapEntry;
-            public Lazy<UObject> ExportObject;
 
             public ResolvedExportObject(int exportIndex, IoPackage package) : base(package, exportIndex)
             {
                 if (exportIndex >= package.ExportMap.Length) return;
                 ExportMapEntry = package.ExportMap[exportIndex];
-                ExportObject = package.ExportsLazy[exportIndex];
             }
 
             public override FName Name => ((IoPackage) Package).CreateFNameFromMappedName(ExportMapEntry.ObjectName);
             public override ResolvedObject Outer => ((IoPackage) Package).ResolveObjectIndex(ExportMapEntry.OuterIndex) ?? new ResolvedLoadedObject((UObject) Package);
             public override ResolvedObject? Class => ((IoPackage) Package).ResolveObjectIndex(ExportMapEntry.ClassIndex);
             public override ResolvedObject? Super => ((IoPackage) Package).ResolveObjectIndex(ExportMapEntry.SuperIndex);
-            public override Lazy<UObject> Object => ExportObject;
         }
 
         private class ResolvedScriptObject : ResolvedObject
@@ -424,6 +544,14 @@ namespace CUE4Parse.UE4.Assets
             // Unfortunately because the mappings format does not distinguish between classes and structs, there's no other way around :(
             public override ResolvedObject Class => new ResolvedLoadedObject(new UScriptClass("Class"));
             public override Lazy<UObject> Object => new(() => new UScriptClass(Name.Text));
+        }
+
+        public static string GetIoPackageName(FArchive uasset)
+        {
+            var uassetAr = new FAssetArchive(uasset, null);
+            var summary = new FZenPackageSummary(uassetAr);
+            var nameMap = FNameEntrySerialized.LoadNameBatch(uassetAr);
+            return new FName(summary.Name, nameMap).Text[1..];
         }
     }
 }

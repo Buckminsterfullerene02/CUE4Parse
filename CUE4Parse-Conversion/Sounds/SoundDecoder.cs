@@ -5,6 +5,7 @@ using CUE4Parse.UE4.Assets.Exports.Sound;
 using CUE4Parse.UE4.Assets.Exports.Wwise;
 using CUE4Parse.UE4.Readers;
 using CUE4Parse_Conversion.Sounds.ADPCM;
+using CUE4Parse.Utils;
 
 namespace CUE4Parse_Conversion.Sounds;
 
@@ -30,7 +31,7 @@ public static class SoundDecoder
             if (soundWave.CompressedFormatData != null)
             {
                 var compressedData = soundWave.CompressedFormatData.Formats.First();
-                audioFormat = compressedData.Key.Text;
+                audioFormat = compressedData.Key.Text.SubstringBefore('_');
                 input = compressedData.Value.Data;
             }
 
@@ -57,13 +58,13 @@ public static class SoundDecoder
         data = Decompress(shouldDecompress, ref audioFormat, input);
     }
 
-    public static void Decode(this UAkMediaAssetData mediaData, bool shouldDecompress, out string audioFormat, out byte[]? data)
+    public static void Decode(this UAkMediaAssetData media, bool shouldDecompress, out string audioFormat, out byte[]? data)
     {
         var offset = 0;
         audioFormat = "WEM";
 
-        var input = new byte[mediaData.DataChunks.Where(x => !x.IsPrefetch).Sum(x => x.Data.Data.Length)];
-        foreach (var dataChunk in mediaData.DataChunks)
+        var input = new byte[media.DataChunks.Where(x => !x.IsPrefetch).Sum(x => x.Data.Data.Length)];
+        foreach (var dataChunk in media.DataChunks)
         {
             if (dataChunk.IsPrefetch) continue;
             Buffer.BlockCopy(dataChunk.Data.Data, 0, input, offset, dataChunk.Data.Data.Length);
@@ -89,6 +90,10 @@ public static class SoundDecoder
                     return input;
             }
         }
+        else if (audioFormat.Equals("BINKA", StringComparison.OrdinalIgnoreCase))
+            return input;
+        else if (audioFormat.Equals("RADA", StringComparison.OrdinalIgnoreCase))
+            return input;
         else if (audioFormat.Equals("OPUS", StringComparison.OrdinalIgnoreCase))
             return input;
         else if (audioFormat.Equals("WEM", StringComparison.OrdinalIgnoreCase))

@@ -4,8 +4,9 @@ using System.Threading.Tasks;
 using CUE4Parse_Conversion.Textures;
 using CUE4Parse.UE4.Assets.Exports.Material;
 using CUE4Parse.UE4.Assets.Exports.Texture;
+using CUE4Parse.Utils;
 using Newtonsoft.Json;
-using SkiaSharp;
+
 
 namespace CUE4Parse_Conversion.Materials
 {
@@ -34,7 +35,8 @@ namespace CUE4Parse_Conversion.Materials
         public MaterialExporter2(UUnrealMaterial? unrealMaterial, ExporterOptions options) : this(options)
         {
             if (unrealMaterial == null) return;
-            _internalFilePath = unrealMaterial.Owner?.Name ?? unrealMaterial.Name;
+            _internalFilePath = (unrealMaterial.Owner?.Provider?.FixPath(unrealMaterial.Owner.Name) ??
+                                 unrealMaterial.Name).SubstringBeforeLast('.');
 
             unrealMaterial.GetParams(_materialData.Parameters, Options.MaterialFormat);
             foreach ((string key, UUnrealMaterial value) in _materialData.Parameters.Textures)
@@ -48,10 +50,9 @@ namespace CUE4Parse_Conversion.Materials
         {
             label = string.Empty;
             savedFilePath = string.Empty;
-            if (!baseDirectory.Exists) return false;
 
             savedFilePath = FixAndCreatePath(baseDirectory, _internalFilePath, "json");
-            File.WriteAllText(savedFilePath, JsonConvert.SerializeObject(_materialData, Formatting.Indented));
+            File.WriteAllTextAsync(savedFilePath, JsonConvert.SerializeObject(_materialData, Formatting.Indented));
             label = Path.GetFileName(savedFilePath);
 
             Parallel.ForEach(_materialData.Parameters.Textures.Values, texture =>
@@ -60,11 +61,10 @@ namespace CUE4Parse_Conversion.Materials
 
                 lock (_texture)
                 {
-                    var texturePath = FixAndCreatePath(baseDirectory, t.Owner?.Name ?? t.Name, "png");
+                    var imageData = bitmap.Encode(Options.TextureFormat, Options.ExportHdrTexturesAsHdr, out var ext);
+                    var texturePath = FixAndCreatePath(baseDirectory,(t.Owner?.Provider?.FixPath(t.Owner.Name) ?? t.Name).SubstringBeforeLast('.'), ext);
                     using var fs = new FileStream(texturePath, FileMode.Create, FileAccess.Write);
-                    using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
-                    using var stream = data.AsStream();
-                    stream.CopyTo(fs);
+                    fs.Write(imageData, 0, imageData.Length);
                 }
             });
 

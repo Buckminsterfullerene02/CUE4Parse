@@ -19,18 +19,18 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
     public class UAnimSequence : UAnimSequenceBase
     {
         public int NumFrames;
-        public FTrackToSkeletonMap[] TrackToSkeletonMapTable; // used for raw data
+        public FTrackToSkeletonMap[]? TrackToSkeletonMapTable; // used for raw data
         public FRawAnimSequenceTrack[] RawAnimationData;
         public ResolvedObject? BoneCompressionSettings; // UAnimBoneCompressionSettings
         public ResolvedObject? CurveCompressionSettings; // UAnimCurveCompressionSettings
 
         #region FCompressedAnimSequence CompressedData
-        public FTrackToSkeletonMap[] CompressedTrackToSkeletonMapTable; // used for compressed data, missing before 4.12
+        public FTrackToSkeletonMap[] CompressedTrackToSkeletonMapTable = []; // used for compressed data, missing before 4.12
         public FSmartName[] CompressedCurveNames;
         //public byte[] CompressedByteStream; The actual data will be in CompressedDataStructure, no need to store as field
         public byte[]? CompressedCurveByteStream;
         public FRawCurveTracks CompressedCurveData; // disappeared in 4.23
-        public ICompressedAnimData CompressedDataStructure;
+        public ICompressedAnimData? CompressedDataStructure;
         public UAnimBoneCompressionCodec? BoneCompressionCodec;
         public UAnimCurveCompressionCodec? CurveCompressionCodec;
         public int CompressedRawDataSize;
@@ -42,6 +42,7 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
         public int RefFrameIndex;
         public FName RetargetSource;
         public FTransform[]? RetargetSourceAssetReferencePose;
+        public EAnimInterpolationType Interpolation;
 
         public bool bUseRawDataOnly;
         public bool EnsuredCurveData;
@@ -49,7 +50,7 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
         public override void Deserialize(FAssetArchive Ar, long validPos)
         {
             base.Deserialize(Ar, validPos);
-
+            if (Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 28;
             NumFrames = GetOrDefault<int>(nameof(NumFrames));
             BoneCompressionSettings = GetOrDefault<ResolvedObject>(nameof(BoneCompressionSettings));
             CurveCompressionSettings = GetOrDefault<ResolvedObject>(nameof(CurveCompressionSettings));
@@ -59,10 +60,21 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
             RefFrameIndex = GetOrDefault(nameof(RefFrameIndex), 0);
             RetargetSource = GetOrDefault<FName>(nameof(RetargetSource));
             RetargetSourceAssetReferencePose = GetOrDefault<FTransform[]>(nameof(RetargetSourceAssetReferencePose));
+            Interpolation = GetOrDefault<EAnimInterpolationType>(nameof(Interpolation));
 
             if (BoneCompressionSettings == null && Ar.Game == EGame.GAME_RogueCompany)
             {
-                BoneCompressionSettings = new ResolvedLoadedObject(Owner!.Provider!.LoadObject("/Game/Animation/KSAnimBoneCompressionSettings.KSAnimBoneCompressionSettings"));
+                BoneCompressionSettings = new ResolvedLoadedObject(Owner!.Provider!.LoadPackageObject("/Game/Animation/KSAnimBoneCompressionSettings.KSAnimBoneCompressionSettings"));
+            }
+
+            if (Ar.Game is EGame.GAME_SuicideSquad) return; // custom format
+            if (Ar.Game == EGame.GAME_DaysGone)
+            {
+                var rawcurvedata = GetOrDefault<FStructFallback>("RawCurveData");
+                if (rawcurvedata is not null && rawcurvedata.TryGet("FloatCurves", out FStructFallback[] array, []))
+                {
+                    Ar.Position += array.Length * sizeof(short);
+                }
             }
 
             var stripFlags = new FStripDataFlags(Ar);
@@ -98,16 +110,16 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
                 }
 
                 // Fix layout of "byte swapped" data (workaround for UE4 bug)
-                if (compressedData.KeyEncodingFormat == AnimationKeyFormat.AKF_PerTrackCompression && compressedData.CompressedScaleOffsets.OffsetData.Length > 0)
+                if (compressedData is { KeyEncodingFormat: AnimationKeyFormat.AKF_PerTrackCompression, CompressedScaleOffsets.OffsetData.Length: > 0 })
                 {
-                    compressedData.CompressedByteStream = TransferPerTrackData(compressedData.CompressedByteStream);
+                    compressedData.CompressedByteStream = TransferPerTrackData(compressedData);
                 }
             }
             else
             {
                 // UE4.12+
                 var bSerializeCompressedData = Ar.ReadBoolean();
-
+                if (Ar.Game == EGame.GAME_GameForPeace && GetOrDefault<bool>("bUseStreamable")) Ar.Position += 24;
                 if (bSerializeCompressedData)
                 {
                     if (Ar.Game < EGame.GAME_UE4_23)
@@ -117,7 +129,7 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
                     else
                         SerializeCompressedData3(Ar);
 
-                    bUseRawDataOnly = Ar.ReadBoolean();
+                    if (Ar.Position + 4 <= validPos) bUseRawDataOnly = Ar.ReadBoolean();
                 }
             }
 
@@ -238,9 +250,9 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
                 compressedData.CompressedNumberOfFrames = Ar.Read<int>();
             }
 
-            var nameIndex = Ar.Read<int>();//ACL thing - KeyEncodingFormat FName
+            var nameIndex = Ar.Read<int>(); //ACL thing - KeyEncodingFormat FName
             Ar.Position -= 4;
-            if (nameIndex >= 0 && nameIndex < Ar.Owner.NameMap.Length)
+            if (nameIndex >= 0 && nameIndex < Ar.Owner?.NameMap.Length)
             {
                 var format = Ar.ReadFName();
                 if ("AKF_" + format.Text != compressedData.KeyEncodingFormat.ToString() && !format.Text.StartsWith("ACL")) Ar.Position -= 8;
@@ -265,9 +277,9 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
             }
 
             // Fix layout of "byte swapped" data (workaround for UE4 bug)
-            if (compressedData.KeyEncodingFormat == AnimationKeyFormat.AKF_PerTrackCompression && compressedData.CompressedScaleOffsets.OffsetData.Length > 0 && Ar.Game < EGame.GAME_UE4_23)
+            if (compressedData is { KeyEncodingFormat: AnimationKeyFormat.AKF_PerTrackCompression, CompressedScaleOffsets.OffsetData.Length: > 0 } && Ar.Game < EGame.GAME_UE4_23)
             {
-                compressedData.CompressedByteStream = TransferPerTrackData(compressedData.CompressedByteStream);
+                compressedData.CompressedByteStream = TransferPerTrackData(compressedData);
             }
         }
 
@@ -330,6 +342,8 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
         {
             var numBytes = Ar.Read<int>();
             var bUseBulkDataForLoad = Ar.ReadBoolean();
+            if (Ar.Game == EGame.GAME_WorldofJadeDynasty)
+                numBytes = (numBytes << 24) | (numBytes & 0xFFFF00) | (byte)(numBytes >> 24);
 
             // In UE4.23 CompressedByteStream field exists in FUECompressedAnimData (as TArrayView) and in
             // FCompressedAnimSequence (as byte array). Serialization is done in FCompressedAnimSequence,
@@ -369,14 +383,16 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
 
         public int GetNumTracks() => CompressedTrackToSkeletonMapTable.Length > 0 ?
             CompressedTrackToSkeletonMapTable.Length :
-            TrackToSkeletonMapTable.Length;
+            TrackToSkeletonMapTable?.Length ?? 0;
 
         public int GetTrackBoneIndex(int trackIndex) => CompressedTrackToSkeletonMapTable.Length > 0 ?
             CompressedTrackToSkeletonMapTable[trackIndex].BoneTreeIndex :
-            TrackToSkeletonMapTable[trackIndex].BoneTreeIndex;
+            TrackToSkeletonMapTable?[trackIndex].BoneTreeIndex ?? -1;
+
+        public FTrackToSkeletonMap[] GetTrackMap() => CompressedTrackToSkeletonMapTable.Length > 0 ? CompressedTrackToSkeletonMapTable : TrackToSkeletonMapTable ?? [];
 
         public int FindTrackForBoneIndex(int boneIndex) {
-            var trackMap = CompressedTrackToSkeletonMapTable.Length > 0 ? CompressedTrackToSkeletonMapTable : TrackToSkeletonMapTable;
+            var trackMap = GetTrackMap();
             for (var trackIndex = 0; trackIndex < trackMap.Length; trackIndex++)
             {
                 if (trackMap[trackIndex].BoneTreeIndex == boneIndex)
@@ -387,11 +403,10 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
 
         private static readonly int[] NumComponentsPerMask = { 3, 1, 1, 2, 1, 2, 2, 3 }; // number of identity bits in value, 0 == all bits
 
-        private byte[] TransferPerTrackData(byte[] src)
+        private byte[] TransferPerTrackData(FUECompressedAnimData compressedData)
         {
-            var dst = new byte[src.Length];
+            var dst = new byte[compressedData.CompressedByteStream.Length];
 
-            var compressedData = (FUECompressedAnimData) CompressedDataStructure;
             var compressedTrackOffsets = compressedData.CompressedTrackOffsets;
             var compressedScaleOffsets = compressedData.CompressedScaleOffsets;
 
@@ -429,13 +444,13 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
                     [MethodImpl(MethodImplOptions.AggressiveInlining)]
                     void Copy(int size)
                     {
-                        Buffer.BlockCopy(src, srcOffset, dst, dstOffset, size);
+                        Buffer.BlockCopy(compressedData.CompressedByteStream, srcOffset, dst, dstOffset, size);
                         srcOffset += size;
                         dstOffset += size;
                     }
 
                     // Decode animation header
-                    var packedInfo = BitConverter.ToUInt32(src, srcOffset);
+                    var packedInfo = BitConverter.ToUInt32(compressedData.CompressedByteStream, srcOffset);
                     Copy(sizeof(uint));
 
                     var keyFormat = (AnimationCompressionFormat) (packedInfo >> 28);

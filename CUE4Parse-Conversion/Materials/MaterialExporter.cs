@@ -14,13 +14,13 @@ namespace CUE4Parse_Conversion.Materials
         private readonly string _internalFilePath;
         private readonly string _fileData;
         private readonly MaterialExporter? _parentData;
-        private readonly IDictionary<string, SKBitmap?> _textures;
+        private readonly IDictionary<string, CTexture?> _textures;
 
         public MaterialExporter()
         {
             _internalFilePath = string.Empty;
             _fileData = string.Empty;
-            _textures = new Dictionary<string, SKBitmap?>();
+            _textures = new Dictionary<string, CTexture?>();
             _parentData = null;
         }
 
@@ -72,7 +72,7 @@ namespace CUE4Parse_Conversion.Materials
                 _textures[t.Owner?.Name ?? t.Name] = t.Decode(Options.Platform);
             }
 
-            if (unrealMaterial is UMaterialInstanceConstant {Parent: { }} material)
+            if (unrealMaterial is UMaterialInstanceConstant {Parent: not null } material)
                 _parentData = new MaterialExporter(material.Parent) { Options = Options };
         }
 
@@ -80,21 +80,21 @@ namespace CUE4Parse_Conversion.Materials
         {
             label = string.Empty;
             savedFilePath = string.Empty;
-            if (!baseDirectory.Exists || string.IsNullOrEmpty(_fileData)) return false;
+            if (string.IsNullOrEmpty(_fileData)) return false;
 
             savedFilePath = FixAndCreatePath(baseDirectory, _internalFilePath, "mat");
-            File.WriteAllText(savedFilePath, _fileData);
+            File.WriteAllTextAsync(savedFilePath, _fileData);
             label = Path.GetFileName(savedFilePath);
 
-            foreach ((string? name, SKBitmap? bitmap) in _textures)
+            foreach ((string name, CTexture? bitmap) in _textures)
             {
-                if (bitmap == null) continue;
+                if (bitmap == null)
+                    continue;
 
-                var texturePath = FixAndCreatePath(baseDirectory, name, "png");
+                var imageData = bitmap.Encode(Options.TextureFormat, Options.ExportHdrTexturesAsHdr, out var ext);
+                var texturePath = FixAndCreatePath(baseDirectory, name, ext);
                 using var fs = new FileStream(texturePath, FileMode.Create, FileAccess.Write);
-                using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
-                using var stream = data.AsStream();
-                stream.CopyTo(fs);
+                fs.Write(imageData, 0, imageData.Length);
             }
 
             if (_parentData != null)

@@ -1,4 +1,5 @@
-﻿using CUE4Parse.UE4.Objects.Core.Math;
+﻿using System;
+using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.Meshes;
 using CUE4Parse.UE4.Objects.RenderCore;
 
@@ -6,7 +7,7 @@ namespace CUE4Parse_Conversion.Meshes.PSK
 {
     public class CSkelMeshLod : CBaseMeshLod
     {
-        public CSkelMeshVertex[] Verts;
+        public CSkelMeshVertex[]? Verts;
         
         public void AllocateVerts(int count)
         {
@@ -32,6 +33,17 @@ namespace CUE4Parse_Conversion.Meshes.PSK
             if (HasTangents) return;
             // BuildTangentsCommon(Verts, Indices);
             HasTangents = true;
+        }
+
+        public override void Dispose()
+        {
+            base.Dispose();
+            
+            if (Verts is null)
+                return;
+            
+            Array.Clear(Verts);
+            Verts = null;
         }
     }
 }

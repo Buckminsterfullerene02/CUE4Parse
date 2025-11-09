@@ -1,28 +1,22 @@
-﻿using CUE4Parse.UE4.Objects.Core.Math;
+using System.Collections.Generic;
+using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.Meshes;
 using CUE4Parse.UE4.Objects.RenderCore;
 
-namespace CUE4Parse_Conversion.Meshes.PSK
+namespace CUE4Parse_Conversion.Meshes.PSK;
+
+public class CSkelMeshVertex : CMeshVertex
 {
-    public class CSkelMeshVertex : CMeshVertex
+    private readonly List<BoneInfluence> _influences = [];
+    
+    public CSkelMeshVertex(FVector position, FPackedNormal normal, FPackedNormal tangent, FMeshUVFloat uv) : base(position, normal, tangent, uv)
     {
-        public uint PackedWeights;
-        public short[]? Bone;
+    }
 
-        public CSkelMeshVertex(FVector position, FPackedNormal normal, FPackedNormal tangent, FMeshUVFloat uv) : base(position, normal, tangent, uv)
-        {
-            Bone = new short[4];
-        }
+    public IReadOnlyList<BoneInfluence> Influences => _influences;
 
-        public float[] UnpackWeights()
-        {
-            var ret = new float[4];
-            var scale = 1.0f / 255;
-            ret[0] =  (PackedWeights        & 0xFF) * scale;
-            ret[1] = ((PackedWeights >> 8 ) & 0xFF) * scale;
-            ret[2] = ((PackedWeights >> 16) & 0xFF) * scale;
-            ret[3] = ((PackedWeights >> 24) & 0xFF) * scale;
-            return ret;
-        }
+    public void AddInfluence(ushort bone, ushort rawWeight, float weight)
+    {
+        _influences.Add(new BoneInfluence(bone, rawWeight, weight));
     }
 }

@@ -1,9 +1,10 @@
-using System;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text;
 using CUE4Parse.UE4.AssetRegistry.Objects;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Readers;
+using CUE4Parse.UE4.Versions;
 
 namespace CUE4Parse.UE4.AssetRegistry.Readers
 {
@@ -12,6 +13,7 @@ namespace CUE4Parse.UE4.AssetRegistry.Readers
         protected readonly FArchive baseArchive;
         public FAssetRegistryHeader Header;
         public FNameEntrySerialized[] NameMap;
+        public bool IsFilterEditorOnly { get; set; }
 
         public abstract void SerializeTagsAndBundles(FAssetData assetData);
 
@@ -19,7 +21,12 @@ namespace CUE4Parse.UE4.AssetRegistry.Readers
         {
             baseArchive = Ar;
             Header = header;
-            NameMap = Array.Empty<FNameEntrySerialized>();
+            NameMap = [];
+        }
+
+        public override string ReadFString()
+        {
+            return Header.Version >= FAssetRegistryVersionType.MarshalledTextAsUTF8String ? baseArchive.ReadFUtf8String() : baseArchive.ReadFString();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

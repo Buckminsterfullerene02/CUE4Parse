@@ -8,6 +8,7 @@ namespace CUE4Parse.UE4.Objects.PhysicsEngine
 {
     public class UBodySetup : Assets.Exports.UObject
     {
+        public FKAggregateGeom? AggGeom;
         public FGuid BodySetupGuid;
         public FFormatContainer? CookedFormatData;
 
@@ -15,16 +16,19 @@ namespace CUE4Parse.UE4.Objects.PhysicsEngine
         {
             base.Deserialize(Ar, validPos);
 
+            AggGeom = GetOrDefault<FKAggregateGeom>(nameof(AggGeom));
+
             BodySetupGuid = Ar.Read<FGuid>();
 
             var bCooked = Ar.ReadBoolean();
             if (!bCooked) return;
             if (Ar.Ver >= EUnrealEngineObjectUE4Version.STORE_HASCOOKEDDATA_FOR_BODYSETUP)
             {
-                var _ = Ar.ReadBoolean(); // bTemp
+                _ = Ar.ReadBoolean(); // bTemp
             }
 
             CookedFormatData = new FFormatContainer(Ar);
+            if (Ar.Game == EGame.GAME_DreamStar) Ar.Position += 4;
         }
 
         protected internal override void WriteJson(JsonWriter writer, JsonSerializer serializer)

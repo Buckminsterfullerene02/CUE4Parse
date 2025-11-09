@@ -1,21 +1,25 @@
-﻿using CUE4Parse.Encryption.Aes;
+﻿using System;
+using CUE4Parse.Encryption.Aes;
 using CUE4Parse.FileProvider.Vfs;
 
 namespace CUE4Parse.UE4.VirtualFileSystem
 {
     public abstract partial class AbstractVfsReader
     {
-        public void MountTo(FileProviderDictionary files, bool caseInsensitive)
+        public void MountTo(FileProviderDictionary files, StringComparer pathComparer, EventHandler<int>? vfsMounted = null)
         {
-            files.AddFiles(Mount(caseInsensitive));
+            Mount(pathComparer);
+
+            files.AddFiles(Files, ReadOrder);
+            vfsMounted?.Invoke(this, files.Count);
         }
     }
     public abstract partial class AbstractAesVfsReader
     {
-        public void MountTo(FileProviderDictionary files, bool caseInsensitive, FAesKey? key)
+        public void MountTo(FileProviderDictionary files, StringComparer pathComparer, FAesKey? key, EventHandler<int>? vfsMounted = null)
         {
             AesKey = key;
-            MountTo(files, caseInsensitive);
+            MountTo(files, pathComparer, vfsMounted);
         }
     }
 }

@@ -3,6 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text;
+using CUE4Parse.GameTypes._2XKO.Kismet;
+using CUE4Parse.GameTypes.Borderlands4.Kismet;
+using CUE4Parse.GameTypes.DFHO.Kismet;
+using CUE4Parse.GameTypes.WuWa.Kismet;
 using CUE4Parse.UE4.Exceptions;
 using CUE4Parse.UE4.Kismet;
 using CUE4Parse.UE4.Objects.UObject;
@@ -39,8 +43,10 @@ public class FKismetArchive : FArchive
             EExprToken.EX_JumpIfNot => new EX_JumpIfNot(this),
             EExprToken.EX_Assert => new EX_Assert(this),
             EExprToken.EX_Nothing => new EX_Nothing(),
+            EExprToken.EX_NothingInt32 => new EX_NothingInt32(this),
             EExprToken.EX_Let => new EX_Let(this),
             EExprToken.EX_ClassContext => new EX_ClassContext(this),
+            EExprToken.EX_BitFieldConst => new EX_BitFieldConst(this),
             EExprToken.EX_MetaCast => new EX_MetaCast(this),
             EExprToken.EX_LetBool => new EX_LetBool(this),
             EExprToken.EX_EndParmValue => new EX_EndParmValue(),
@@ -126,7 +132,19 @@ public class FKismetArchive : FArchive
             EExprToken.EX_ArrayGetByRef => new EX_ArrayGetByRef(this),
             EExprToken.EX_ClassSparseDataVariable => new EX_ClassSparseDataVariable(this),
             EExprToken.EX_FieldPathConst => new EX_FieldPathConst(this),
-            _ => throw new ParserException("Unknown EExprToken")
+            EExprToken.EX_AutoRtfmStopTransact => new EX_AutoRtfmStopTransact(this),
+            EExprToken.EX_AutoRtfmTransact => new EX_AutoRtfmTransact(this),
+            EExprToken.EX_AutoRtfmAbortIfNot => new EX_AutoRtfmAbortIfNot(),
+
+            EExprToken.EX_6E when Versions.Game == EGame.GAME_WutheringWaves => new EX_WuWaInstr1(this),
+            EExprToken.EX_6F when Versions.Game == EGame.GAME_WutheringWaves => new EX_WuWaInstr2(this),
+            EExprToken.EX_6E when Versions.Game == EGame.GAME_DeltaForceHawkOps => new EX_DFInstr(this),
+            EExprToken.EX_FD when Versions.Game == EGame.GAME_2XKO => new EX_FixedPointConst(this),
+            EExprToken.EX_F9 when Versions.Game == EGame.GAME_Borderlands4 => new EX_DamageSourceContainer(this),
+            EExprToken.EX_FD when Versions.Game == EGame.GAME_Borderlands4 => new EX_GbxDefPtr(this),
+            EExprToken.EX_FE when Versions.Game == EGame.GAME_Borderlands4 => new EX_GameDataHandle(this),
+
+            _ => throw new ParserException($"Unknown EExprToken {token}")
         };
         expression.StatementIndex = index;
         return expression;
@@ -143,9 +161,15 @@ public class FKismetArchive : FArchive
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string XFERUNICODESTRING()
     {
-        var length = _data.AsSpan((int)Position).IndexOf(stackalloc byte[2]);
-        if (length == -1) throw new ParserException("Couldn't find end of the string");
-        if (length % 2 == 1) length++;
+        var pos = (int)Position;
+        var length = -1;
+        Span<byte> terminator = stackalloc byte[2];
+        do
+        {
+            length += _data.AsSpan(pos + length + 1).IndexOf(terminator) + 1;
+        }
+        while (length % 2 != 0 || length == -1);
+        if (length == -1) throw new ParserException("Couldn't find end of the unicode string");
         return Encoding.Unicode.GetString(ReadBytes(length));
     }
 

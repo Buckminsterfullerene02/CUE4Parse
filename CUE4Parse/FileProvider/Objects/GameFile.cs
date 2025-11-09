@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
@@ -7,86 +9,144 @@ using CUE4Parse.UE4.Readers;
 using CUE4Parse.Utils;
 using Serilog;
 
-namespace CUE4Parse.FileProvider.Objects
+namespace CUE4Parse.FileProvider.Objects;
+
+public abstract class GameFile
 {
-    public abstract class GameFile
+    public static readonly string[] UePackageExtensions = ["uasset", "umap"];
+    public static readonly string[] UePackagePayloadExtensions = ["uexp", "ubulk", "uptnl"];
+    public static readonly string[] UeKnownExtensions =
+    [
+        ..UePackageExtensions, ..UePackagePayloadExtensions,
+        "bin", "ini", "uplugin", "upluginmanifest", "locres", "locmeta",
+    ];
+
+    // hashset for quick lookup
+    public static readonly HashSet<string> UePackageExtensionsSet = UePackageExtensions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    public static readonly HashSet<string> UePackagePayloadExtensionsSet = UePackagePayloadExtensions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    public static readonly HashSet<string> UeKnownExtensionsSet = UeKnownExtensions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    // so we don't end up with a lot of duplicate "uasset"s in memory
+    private static readonly Dictionary<string, string> InternedExtensions = new(StringComparer.OrdinalIgnoreCase);
+
+    private string _path;
+    private string? _directory;
+    private string? _pathWithoutExtension;
+    private string? _name;
+    private string? _nameWithoutExtension;
+    private string? _extension;
+
+    protected GameFile() { }
+    protected GameFile(string path, long size)
     {
-        public static readonly string[] Ue4PackageExtensions = { "uasset", "umap" };
-        public static readonly string[] Ue4KnownExtensions = { "uasset", "umap", "uexp", "ubulk", "uptnl" };
+        Path = path;
+        Size = size;
+    }
 
-        protected GameFile() { }
-        protected GameFile(string path, long size)
+    public abstract bool IsEncrypted { get; }
+    public abstract CompressionMethod CompressionMethod { get; }
+
+    public string Path
+    {
+        get => _path;
+        protected internal set
         {
-            Path = path;
-            Size = size;
+            _path = value;
+
+            _directory = null;
+            _pathWithoutExtension = null;
+            _name = null;
+            _nameWithoutExtension = null;
+            _extension = null;
         }
+    }
+    public long Size { get; protected init; }
 
-        public abstract bool IsEncrypted { get; }
-        public abstract CompressionMethod CompressionMethod { get; }
-        public string Path { get; protected internal set; }
-        public long Size { get; protected set; }
+    public string Directory => _directory ??= Path.SubstringBeforeLast('/');
+    public string PathWithoutExtension => _pathWithoutExtension ??= Path.SubstringBeforeLast('.');
+    public string Name => _name ??= Path.SubstringAfterLast('/');
+    public string NameWithoutExtension => _nameWithoutExtension ??= Name.SubstringBeforeLast('.');
+    public string Extension => _extension ??= InternExtension(Name.SubstringAfterLast('.'));
 
-        public string PathWithoutExtension => Path.SubstringBeforeLast('.');
-        public string Name => Path.SubstringAfterLast('/');
-        public string NameWithoutExtension => Name.SubstringBeforeLast('.');
-        public string Extension => Path.SubstringAfterLast('.');
+    public bool IsUePackage => UePackageExtensionsSet.Contains(Extension);
+    public bool IsUePackagePayload => UePackagePayloadExtensionsSet.Contains(Extension);
 
-        public bool IsUE4Package => Ue4PackageExtensions.Contains(Extension, StringComparer.OrdinalIgnoreCase);
+    public abstract byte[] Read();
+    public abstract FArchive CreateReader();
 
-        public abstract byte[] Read();
-        public abstract FArchive CreateReader();
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public virtual bool TryRead(out byte[] data)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryRead([MaybeNullWhen(false)] out byte[] data)
+    {
+        try
         {
-            try
-            {
-                data = Read();
-                return true;
-            }
-            catch
-            {
-#pragma warning disable 8625
-                data = default;
-#pragma warning restore 8625
-                return false;
-            }
+            data = Read();
         }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public virtual bool TryCreateReader(out FArchive reader)
+        catch (Exception e)
         {
-            try
-            {
-                reader = CreateReader();
-                return true;
-            }
-            catch (Exception e)
-            {
-                Log.Warning(e, "Couldn't create GameFile reader");
-                reader = default;
-                return false;
-            }
+            Log.Error(e, $"Could not read GameFile {this}");
+            data = null;
         }
+        return data != null;
+    }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public virtual async Task<byte[]> ReadAsync() => await Task.Run(Read); // No ConfigureAwait(false) here since the context is needed handling exceptions
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public virtual async Task<FArchive> CreateReaderAsync() => await Task.Run(CreateReader);  // No ConfigureAwait(false) here since the context is needed handling exceptions
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public virtual async Task<byte[]?> TryReadAsync() => await Task.Run(() =>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryCreateReader([MaybeNullWhen(false)] out FArchive reader)
+    {
+        try
         {
-            TryRead(out var data);
-            return data;
-        }).ConfigureAwait(false);
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public virtual async Task<FArchive?> TryCreateReaderAsync() => await Task.Run(() =>
+            reader = CreateReader();
+        }
+        catch (Exception e)
         {
-            TryCreateReader(out var reader);
-            return reader;
-        }).ConfigureAwait(false);
+            Log.Error(e, $"Could not create reader for GameFile {this}");
+            reader = null;
+        }
+        return reader != null;
+    }
 
-        public override string ToString() => Path;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public byte[]? SafeRead()
+    {
+        TryRead(out var data);
+        return data;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public FArchive? SafeCreateReader()
+    {
+        TryCreateReader(out var reader);
+        return reader;
+    }
+
+    // No ConfigureAwait(false) here since the context is needed handling exceptions
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public async Task<byte[]> ReadAsync() => await Task.Run(Read);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public async Task<FArchive> CreateReaderAsync() => await Task.Run(CreateReader);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public async Task<byte[]?> SafeReadAsync() => await Task.Run(SafeRead);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public async Task<FArchive?> SafeCreateReaderAsync() => await Task.Run(SafeCreateReader);
+
+    public override string ToString() => Path;
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string InternExtension(string extension)
+    {
+        if (InternedExtensions.TryGetValue(extension, out var interned))
+            return interned;
+        
+        lock (InternedExtensions)
+        {
+            if (InternedExtensions.TryGetValue(extension, out interned))
+                return interned;
+            
+            InternedExtensions[extension] = extension;
+            return extension;
+        }
     }
 }

@@ -1,4 +1,4 @@
-﻿using CUE4Parse.UE4.AssetRegistry.Readers;
+using CUE4Parse.UE4.AssetRegistry.Readers;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Objects.Core.Serialization;
 using CUE4Parse.UE4.Objects.UObject;
@@ -17,14 +17,25 @@ namespace CUE4Parse.UE4.AssetRegistry.Objects
         public readonly long DiskSize;
         public readonly FPackageFileVersion FileVersionUE;
         public readonly int FileVersionLicenseeUE = -1;
-        public readonly FCustomVersionContainer CustomVersions;
+        public readonly FCustomVersionContainer? CustomVersions;
         public readonly uint Flags;
+        public readonly FSHAHash PackageSavedHash;
+        public readonly string? ExtensionText;
 
         public FAssetPackageData(FAssetRegistryArchive Ar)
         {
             PackageName = Ar.ReadFName();
             DiskSize = Ar.Read<long>();
-            PackageGuid = Ar.Read<FGuid>();
+
+            if (Ar.Header.Version < FAssetRegistryVersionType.PackageSavedHash)
+            {
+                PackageGuid = Ar.Read<FGuid>();
+            }
+            else
+            {
+                PackageSavedHash = new FSHAHash(Ar);
+            }
+
             if (Ar.Header.Version >= FAssetRegistryVersionType.AddedCookedMD5Hash)
             {
                 CookedHash = new FMD5Hash(Ar);
@@ -32,7 +43,7 @@ namespace CUE4Parse.UE4.AssetRegistry.Objects
             if (Ar.Header.Version >= FAssetRegistryVersionType.AddedChunkHashes)
             {
                 // TMap<FIoChunkId, FIoHash> ChunkHashes;
-                Ar.Position += Ar.Read<int>() * (12 + 20);
+                Ar.Position += Ar.Read<int>() * (12 + 20) + 4;
             }
             if (Ar.Header.Version >= FAssetRegistryVersionType.WorkspaceDomain)
             {
@@ -48,11 +59,16 @@ namespace CUE4Parse.UE4.AssetRegistry.Objects
 
                 FileVersionLicenseeUE = Ar.Read<int>();
                 Flags = Ar.Read<uint>();
+                if (Ar.Game is EGame.GAME_MarvelRivals) Ar.Position += 4;
                 CustomVersions = new FCustomVersionContainer(Ar);
             }
             if (Ar.Header.Version >= FAssetRegistryVersionType.PackageImportedClasses)
             {
                 ImportedClasses = Ar.ReadArray(Ar.ReadFName);
+            }
+            if (Ar.Header.Version >= FAssetRegistryVersionType.AssetPackageDataHasExtension)
+            {
+                ExtensionText = Ar.ReadFString();
             }
         }
     }

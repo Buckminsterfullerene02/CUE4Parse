@@ -1,4 +1,4 @@
-﻿namespace CUE4Parse.Compression
+namespace CUE4Parse.Compression
 {
     public enum CompressionMethod
     {
@@ -9,6 +9,8 @@
         Oodle = 4,
         LZ4,
         Zstd,
+        XB1Zlib,
+        XboxOneGDKZlib,
         Unknown
     }
 }

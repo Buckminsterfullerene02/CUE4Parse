@@ -26,13 +26,11 @@ namespace CUE4Parse.UE4.Objects.Engine.Curves
 
             for (var i = 0; i < Properties.Count; ++i)
             {
-                if (Properties[i].Tag?.GenericValue is UScriptStruct { StructType: FStructFallback fallback })
+                if (Properties[i].Tag?.GenericValue is FScriptStruct { StructType: FStructFallback fallback })
                 {
                     FloatCurves[i] = new FRichCurve(fallback);
                 }
             }
-
-            if (FloatCurves.Length > 0) Properties.Clear(); // Don't write these for this object
         }
 
         protected internal override void WriteJson(JsonWriter writer, JsonSerializer serializer)
@@ -109,8 +107,8 @@ namespace CUE4Parse.UE4.Objects.Engine.Curves
             }
 
             var linearColor = hsvColor.HSVToLinearRGB();
-            linearColor.A = MathUtils.Lerp(AdjustMinAlpha, AdjustMaxAlpha, originalColor.A);
-            return linearColor;
+            var newAlpha = MathUtils.Lerp(AdjustMinAlpha, AdjustMaxAlpha, originalColor.A);
+            return linearColor.WithAlpha(newAlpha);
         }
     }
 }
