@@ -16,17 +16,18 @@ using Newtonsoft.Json;
 using System.CommandLine;
 using System.CommandLine.Builder;
 using System.CommandLine.Parsing;
+using CUE4Parse.FileProvider.Objects;
 
 public class Progam
 {
     // SET THESE FOR YOUR GAME
-    private const string _pakDir = @"C:\Program Files (x86)\Steam\steamapps\common\Deep Rock Galactic\FSD\Content\Paks";
+    private const string _pakDir = @"D:\STEAM GAMES\steamapps\common\Hydroneer\Mining\Content\Paks";
     private const string _aesKey = ""; // If your game does not have an AES key, leave this empty
     private const string _mapping = ""; // If your game does not need a mappings file, leave this empty
-    private const EGame  _version = EGame.GAME_UE4_27; // Check if your game has a custom version, as some do
+    private const EGame  _version = EGame.GAME_UE4_26; // Check if your game has a custom version, as some do
     private const bool   _exportMaterials = false; // This needs to be false if generating for CAS+UEAT
     private const bool   _useInternalName = true; // Sometimes package path is not set properly meaning paths are not synced, so if it isn't, set to true
-    private const string _outputDir = @"F:\DRG Modding\DRGPacker\JSON\Animation Stuff\";
+    private const string _outputDir = @"F:\Hydroneer Modding\UnrealPacker426\JSON\AnimExportStripped";
     private const bool   _replaceFiles = false;
     private const bool   _printSuccess = true; // Once you've verified this works, set this to false to reduce console spam
     
@@ -36,7 +37,10 @@ public class Progam
      * Warning: Always replaces existing files regardless of _replaceFiles
      * Warning: Has no support for broken RefPose animation additives
      */
-    private const bool   _hasStrippedAssetRegistry = false; 
+    private const bool   _hasStrippedAssetRegistry = true;
+
+    private const bool   _isPluginPak = false;
+    private const string _pluginName = "DLC01";
     
     /*
      * Folder names for each item type where:
@@ -71,8 +75,18 @@ public class Progam
         
         if (hasStrippedAR)
         {
-            var folderAssets = provider.Files.Values.Where(file =>
-                file.Path.StartsWith(provider.InternalGameName + "/Content/", StringComparison.OrdinalIgnoreCase));
+            IEnumerable<GameFile> folderAssets;
+            if (_isPluginPak)
+            {
+                folderAssets = provider.Files.Values.Where(file =>
+                    file.Path.StartsWith(provider.InternalGameName + "/Plugins/" + _pluginName + "/Content/", StringComparison.OrdinalIgnoreCase));
+            }
+            else
+            {
+                folderAssets = provider.Files.Values.Where(file =>
+                    file.Path.StartsWith(provider.InternalGameName + "/Content/", StringComparison.OrdinalIgnoreCase));    
+            }
+            
             foreach (var asset in folderAssets)
             {
                 if (provider.TryLoadObject(asset.PathWithoutExtension, out UAnimSequence seq)) ExportFromGameFiles(seq, _folderNames[0]);
@@ -92,6 +106,8 @@ public class Progam
             foreach (var asset in assets)
             {
                 if (!asset.PackagePath.ToString().StartsWith("/Game")) continue;
+
+                //if (!asset.PackageName.ToString().Contains("Zurg")) continue; // For debugging purposes
                 
                 // SET THIS FOR ANY ADDITIVE ASSETS THAT ARE FAILING TO EXPORT DUE TO INCORRECT REF POSE
                 if (asset.PackageName.ToString() == @"/Game/Enemies/HydraWeed/Assets/ANIM_HydraWeed_Heart_Damaged_Additive")
@@ -131,13 +147,20 @@ public class Progam
     {
         try
         {
+            if (!Directory.Exists(Path.Join(_outputDir, outFolder))) Directory.CreateDirectory(Path.Join(_outputDir, outFolder));
+            
             var options = new ExporterOptions { ExportMaterials = _exportMaterials };
             var exporter = new Exporter(asset, options);
-            if (!Directory.Exists(Path.Join(_outputDir, outFolder))) Directory.CreateDirectory(Path.Join(_outputDir, outFolder));
             exporter.TryWriteToDir(new DirectoryInfo(Path.Join(_outputDir, outFolder)), out _, out var fileName);
+            
             var json = JsonConvert.SerializeObject(asset, Formatting.Indented);
-            await File.WriteAllTextAsync(fileName.SubstringBefore(".") + ".json", json);
-            if (_printSuccess) Console.WriteLine(fileName);
+            var jsonFile = fileName.SubstringBefore(".") + ".json";
+            await File.WriteAllTextAsync(jsonFile, json);
+            if (_printSuccess)
+            {
+                Console.WriteLine(fileName);
+                Console.WriteLine(jsonFile);
+            }
         }
         catch (Exception e)
         {
