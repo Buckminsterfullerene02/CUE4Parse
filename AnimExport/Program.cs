@@ -1,6 +1,12 @@
-﻿using CUE4Parse_Conversion;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using CUE4Parse_Conversion;
 using CUE4Parse.Encryption.Aes;
 using CUE4Parse.FileProvider;
+using CUE4Parse.FileProvider.Objects;
 using CUE4Parse.MappingsProvider;
 using CUE4Parse.UE4.AssetRegistry;
 using CUE4Parse.UE4.AssetRegistry.Objects;
@@ -10,24 +16,20 @@ using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using CUE4Parse.UE4.Objects.Core.Misc;
+using CUE4Parse.UE4.Readers;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse.Utils;
 using Newtonsoft.Json;
-using System.CommandLine;
-using System.CommandLine.Builder;
-using System.CommandLine.Parsing;
-using CUE4Parse.FileProvider.Objects;
 
-public class Progam
+public class Program
 {
     // SET THESE FOR YOUR GAME
-    private const string _pakDir = @"D:\STEAM GAMES\steamapps\common\Hydroneer\Mining\Content\Paks";
+    private const string _pakDir = @"C:\Program Files (x86)\Steam\steamapps\common\Whiskerwood\Whiskerwood\Content\Paks";
     private const string _aesKey = ""; // If your game does not have an AES key, leave this empty
-    private const string _mapping = ""; // If your game does not need a mappings file, leave this empty
-    private const EGame  _version = EGame.GAME_UE4_26; // Check if your game has a custom version, as some do
-    private const bool   _exportMaterials = false; // This needs to be false if generating for CAS+UEAT
-    private const bool   _useInternalName = true; // Sometimes package path is not set properly meaning paths are not synced, so if it isn't, set to true
-    private const string _outputDir = @"F:\Hydroneer Modding\UnrealPacker426\JSON\AnimExportStripped";
+    private const string _mapping = @"F:\Whiskerwood Modding\Whiskerwood.usmap";  // If your game does not need a mappings file, leave this empty
+    private const EGame  _version = EGame.GAME_UE5_6; // Check if your game has a custom version, as some do
+    private const bool   _exportMaterials = true; // This needs to be false if generating for CAS+UEAT
+    private const string _outputDir = @"F:\Whiskerwood Modding\dumps";
     private const bool   _replaceFiles = false;
     private const bool   _printSuccess = true; // Once you've verified this works, set this to false to reduce console spam
     
@@ -37,7 +39,7 @@ public class Progam
      * Warning: Always replaces existing files regardless of _replaceFiles
      * Warning: Has no support for broken RefPose animation additives
      */
-    private const bool   _hasStrippedAssetRegistry = true;
+    private const bool   _hasStrippedAssetRegistry = false;
 
     private const bool   _isPluginPak = false;
     private const string _pluginName = "DLC01";
@@ -66,8 +68,8 @@ public class Progam
 
     private static async Task<DefaultFileProvider> ExportAssets(bool hasStrippedAR = false)
     {
-        var provider = new DefaultFileProvider(_pakDir, SearchOption.TopDirectoryOnly, true,
-            new VersionContainer(_version));
+        var provider = new DefaultFileProvider(_pakDir, SearchOption.TopDirectoryOnly, 
+            new VersionContainer(_version), StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrEmpty(_mapping)) provider.MappingsContainer = new FileUsmapTypeMappingsProvider(_mapping);
         provider.Initialize();
         if (!string.IsNullOrEmpty(_aesKey)) await provider.SubmitKeyAsync(new FGuid(), new FAesKey(_aesKey));
@@ -79,28 +81,33 @@ public class Progam
             if (_isPluginPak)
             {
                 folderAssets = provider.Files.Values.Where(file =>
-                    file.Path.StartsWith(provider.InternalGameName + "/Plugins/" + _pluginName + "/Content/", StringComparison.OrdinalIgnoreCase));
+                    file.Path.StartsWith($"{provider.ProjectName}/Plugins/{_pluginName}/Content/", StringComparison.OrdinalIgnoreCase));
             }
             else
             {
                 folderAssets = provider.Files.Values.Where(file =>
-                    file.Path.StartsWith(provider.InternalGameName + "/Content/", StringComparison.OrdinalIgnoreCase));    
+                    file.Path.StartsWith($"{provider.ProjectName}/Content/", StringComparison.OrdinalIgnoreCase));    
             }
             
             foreach (var asset in folderAssets)
             {
-                if (provider.TryLoadObject(asset.PathWithoutExtension, out UAnimSequence seq)) ExportFromGameFiles(seq, _folderNames[0]);
-                if (provider.TryLoadObject(asset.PathWithoutExtension, out UAnimMontage mont)) ExportFromGameFiles(mont, _folderNames[1]);
-                if (provider.TryLoadObject(asset.PathWithoutExtension, out UAnimComposite comp)) ExportFromGameFiles(comp, _folderNames[2]);
-                if (provider.TryLoadObject(asset.PathWithoutExtension, out USkeletalMesh skm)) ExportFromGameFiles(skm, _folderNames[3]);
-                if (provider.TryLoadObject(asset.PathWithoutExtension, out UStaticMesh sm)) ExportFromGameFiles(sm, _folderNames[4]);
-                if (provider.TryLoadObject(asset.PathWithoutExtension, out USkeleton sk)) ExportFromGameFiles(sk, _folderNames[5]);
+                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UAnimSequence seq)) ExportFromGameFiles(seq, _folderNames[0]);
+                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UAnimMontage mont)) ExportFromGameFiles(mont, _folderNames[1]);
+                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UAnimComposite comp)) ExportFromGameFiles(comp, _folderNames[2]);
+                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out USkeletalMesh skm)) ExportFromGameFiles(skm, _folderNames[3]);
+                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UStaticMesh sm)) ExportFromGameFiles(sm, _folderNames[4]);
+                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out USkeleton sk)) ExportFromGameFiles(sk, _folderNames[5]);
             }
         }
         else
         {
             List<FAssetData> assets = new();
-            var assetArchive = await provider.TryCreateReaderAsync(Path.Join(provider.InternalGameName, "AssetRegistry.bin"));
+            var assetRegistryPath = $"{provider.ProjectName}/AssetRegistry.bin";
+            FArchive assetArchive = null;
+            if (provider.TryGetGameFile(assetRegistryPath, out var assetRegistryFile))
+            {
+                assetArchive = await assetRegistryFile.SafeCreateReaderAsync();
+            }
             if (assetArchive is not null) assets.AddRange(new FAssetRegistryState(assetArchive).PreallocatedAssetDataBuffers);
 
             foreach (var asset in assets)
@@ -169,9 +176,9 @@ public class Progam
     }
 
     private static void ExportFromAssetData<T>(DefaultFileProvider provider, string outFolder,
-        FAssetData asset, FAssetData? extraAsset = null) where T : UObject
+        FAssetData asset, FAssetData extraAsset = null) where T : UObject
     {
-        var contentDir = _useInternalName ? Path.Join(provider.InternalGameName.ToUpper(), "Content") : "Game";
+        var contentDir = "Game";
         var name = asset.AssetName.ToString();
         var dir = asset.PackagePath.ToString().Remove(0, 5);
         var jsonDir = Path.Join(_outputDir, outFolder, contentDir, dir);
@@ -187,7 +194,7 @@ public class Progam
         var objName = objPath[^1].Split(".");
         if (objPath.Length > 1 && !string.Equals(objName[0], objName[1], StringComparison.CurrentCultureIgnoreCase)) return;
 
-        var refObject = provider.LoadObject<T>(path);
+        var refObject = provider.LoadPackageObject<T>(path);
         if (refObject is UAnimSequence animSeq && animSeq.AdditiveAnimType != EAdditiveAnimationType.AAT_None)
         {
             animAdditives.Add(animSeq.GetPathName().Split(".")[0]);
@@ -198,7 +205,7 @@ public class Progam
             var tAnimSeqName = extraAsset.AssetName.ToString();
             var tAnimSeqDir = extraAsset.PackagePath.ToString().Remove(0, 5);
             var tPath = Path.Join(contentDir, tAnimSeqDir, tAnimSeqName).Replace(Path.DirectorySeparatorChar, '/');
-            var addUAnimSequence = provider.LoadObject<UAnimSequence>(tPath);
+            var addUAnimSequence = provider.LoadPackageObject<UAnimSequence>(tPath);
             if (refObject is UAnimSequence refUAnimSequence)
             {
                 refUAnimSequence.RefPoseSeq = new ResolvedLoadedObject(addUAnimSequence);
@@ -236,7 +243,7 @@ public class Progam
     private static void CreateBlenderSKs(DefaultFileProvider provider, string outFolder)
     {
         var blenderDir = Path.Join(_outputDir, outFolder, "Blender");
-        var contentDir = _useInternalName ? Path.Join(provider.InternalGameName.ToUpper(), "Content") : "Game";
+        var contentDir = "Game";
         if (!Directory.Exists(Path.Join(_outputDir, outFolder, contentDir))) return;
         if (!Directory.Exists(blenderDir)) Directory.CreateDirectory(blenderDir);
         foreach (var file in Directory.GetFiles(Path.Join(_outputDir, outFolder, contentDir),
