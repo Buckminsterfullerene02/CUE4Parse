@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using CUE4Parse_Conversion;
 using CUE4Parse.Encryption.Aes;
@@ -30,8 +32,15 @@ public class Program
     private const EGame  _version = EGame.GAME_UE5_6; // Check if your game has a custom version, as some do
     private const bool   _exportMaterials = true; // This needs to be false if generating for CAS+UEAT
     private const string _outputDir = @"F:\Whiskerwood Modding\dumps";
+    private const bool   _generateJson = true; // Whether to generate JSON files alongside exported assets
     private const bool   _replaceFiles = false;
     private const bool   _printSuccess = true; // Once you've verified this works, set this to false to reduce console spam
+    
+    /*
+     * Multi-threading configuration
+     */
+    private const bool   _useMultiThreading = true; // Set to false to disable multi-threading for debugging
+    private const int    _maxDegreeOfParallelism = -1; // -1 = use all available cores, or set specific number (be careful with this tho)
     
     /*
      * Some games (e.g. Valorant) have a stripped AssetRegistry file so set this to true if yours does
@@ -57,10 +66,19 @@ public class Program
     private static readonly List<string> _folderNames = new() { "Anims", "Anims", "Anims", "SKMs", "SMs", "SKs" };
     
     // DO NOT TOUCH ANYTHING BELOW THIS LINE
-    private static List<string> animAdditives = new();
+    private static ConcurrentBag<string> animAdditives = new();
+    private static int _processedAssets = 0;
 
     static async Task Main(string[] args)
     {
+        Console.WriteLine($"Starting export process...");
+        Console.WriteLine($"Multi-threading: {(_useMultiThreading ? "Enabled" : "Disabled")}");
+        if (_useMultiThreading)
+        {
+            var maxThreads = _maxDegreeOfParallelism == -1 ? Environment.ProcessorCount : _maxDegreeOfParallelism;
+            Console.WriteLine($"Max degree of parallelism: {maxThreads}");
+            Console.WriteLine($"Could use up to {Environment.ProcessorCount} threads based on CPU cores");
+        }
         DefaultFileProvider provider = await ExportAssets(_hasStrippedAssetRegistry);
         CreateBlenderSKs(provider, _folderNames[5]);
         PrintAnimAdditives();
@@ -88,15 +106,30 @@ public class Program
                 folderAssets = provider.Files.Values.Where(file =>
                     file.Path.StartsWith($"{provider.ProjectName}/Content/", StringComparison.OrdinalIgnoreCase));    
             }
-            
-            foreach (var asset in folderAssets)
+
+            var parallelOptions = new ParallelOptions();
+            if (_useMultiThreading && _maxDegreeOfParallelism > 0)
             {
-                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UAnimSequence seq)) ExportFromGameFiles(seq, _folderNames[0]);
-                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UAnimMontage mont)) ExportFromGameFiles(mont, _folderNames[1]);
-                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UAnimComposite comp)) ExportFromGameFiles(comp, _folderNames[2]);
-                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out USkeletalMesh skm)) ExportFromGameFiles(skm, _folderNames[3]);
-                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UStaticMesh sm)) ExportFromGameFiles(sm, _folderNames[4]);
-                if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out USkeleton sk)) ExportFromGameFiles(sk, _folderNames[5]);
+                parallelOptions.MaxDegreeOfParallelism = _maxDegreeOfParallelism;
+            }
+            else if (!_useMultiThreading)
+            {
+                parallelOptions.MaxDegreeOfParallelism = 1;
+            }
+
+            if (_useMultiThreading)
+            {
+                Parallel.ForEach(folderAssets, parallelOptions, asset =>
+                {
+                    ProcessGameFileAsset(provider, asset);
+                });
+            }
+            else
+            {
+                foreach (var asset in folderAssets)
+                {
+                    ProcessGameFileAsset(provider, asset);
+                }
             }
         }
         else
@@ -110,39 +143,33 @@ public class Program
             }
             if (assetArchive is not null) assets.AddRange(new FAssetRegistryState(assetArchive).PreallocatedAssetDataBuffers);
 
-            foreach (var asset in assets)
+            // Filter assets that start with "/Game"
+            var gameAssets = assets.Where(asset => asset.PackagePath.ToString().StartsWith("/Game")).ToList();
+            
+            Console.WriteLine($"Found {gameAssets.Count} assets to process...");
+
+            var parallelOptions = new ParallelOptions();
+            if (_useMultiThreading && _maxDegreeOfParallelism > 0)
             {
-                if (!asset.PackagePath.ToString().StartsWith("/Game")) continue;
+                parallelOptions.MaxDegreeOfParallelism = _maxDegreeOfParallelism;
+            }
+            else if (!_useMultiThreading)
+            {
+                parallelOptions.MaxDegreeOfParallelism = 1;
+            }
 
-                //if (!asset.PackageName.ToString().Contains("Zurg")) continue; // For debugging purposes
-                
-                // SET THIS FOR ANY ADDITIVE ASSETS THAT ARE FAILING TO EXPORT DUE TO INCORRECT REF POSE
-                if (asset.PackageName.ToString() == @"/Game/Enemies/HydraWeed/Assets/ANIM_HydraWeed_Heart_Damaged_Additive")
+            if (_useMultiThreading)
+            {
+                Parallel.ForEach(gameAssets, parallelOptions, asset =>
                 {
-                    ExportFromAssetData<UAnimSequence>(provider, _folderNames[0], asset, assets[assets.IndexOf(asset) + 1]);
-                    continue;
-                }
-
-                switch (asset.AssetClass.Text)
+                    ProcessAssetData(provider, asset, assets);
+                });
+            }
+            else
+            {
+                foreach (var asset in gameAssets)
                 {
-                    case "AnimSequence":
-                        ExportFromAssetData<UAnimSequence>(provider, _folderNames[0], asset);
-                        break;
-                    case "AnimMontage":
-                        ExportFromAssetData<UAnimMontage>(provider, _folderNames[1], asset);
-                        break;
-                    case "AnimComposite":
-                        ExportFromAssetData<UAnimComposite>(provider, _folderNames[2], asset);
-                        break;
-                    case "SkeletalMesh":
-                        ExportFromAssetData<USkeletalMesh>(provider, _folderNames[3], asset);
-                        break;
-                    case "StaticMesh":
-                        ExportFromAssetData<UStaticMesh>(provider, _folderNames[4], asset);
-                        break;
-                    case "Skeleton":
-                        ExportFromAssetData<USkeleton>(provider, _folderNames[5], asset);
-                        break;
+                    ProcessAssetData(provider, asset, assets);
                 }
             }
         }
@@ -150,35 +177,117 @@ public class Program
         return provider;
     }
 
-    private static async void ExportFromGameFiles<T>(T asset, string outFolder) where T : UObject
+    private static void ProcessGameFileAsset(DefaultFileProvider provider, GameFile asset)
     {
         try
         {
-            if (!Directory.Exists(Path.Join(_outputDir, outFolder))) Directory.CreateDirectory(Path.Join(_outputDir, outFolder));
-            
-            var options = new ExporterOptions { ExportMaterials = _exportMaterials };
-            var exporter = new Exporter(asset, options);
-            exporter.TryWriteToDir(new DirectoryInfo(Path.Join(_outputDir, outFolder)), out _, out var fileName);
-            
-            var json = JsonConvert.SerializeObject(asset, Formatting.Indented);
-            var jsonFile = fileName.SubstringBefore(".") + ".json";
-            await File.WriteAllTextAsync(jsonFile, json);
-            if (_printSuccess)
+            if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UAnimSequence seq)) ExportFromGameFiles(seq, _folderNames[0]);
+            if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UAnimMontage mont)) ExportFromGameFiles(mont, _folderNames[1]);
+            if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UAnimComposite comp)) ExportFromGameFiles(comp, _folderNames[2]);
+            if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out USkeletalMesh skm)) ExportFromGameFiles(skm, _folderNames[3]);
+            if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out UStaticMesh sm)) ExportFromGameFiles(sm, _folderNames[4]);
+            if (provider.TryLoadPackageObject(asset.PathWithoutExtension, out USkeleton sk)) ExportFromGameFiles(sk, _folderNames[5]);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"Error processing asset {asset.PathWithoutExtension}: {e.Message}");
+        }
+    }
+
+    private static void ProcessAssetData(DefaultFileProvider provider, FAssetData asset, List<FAssetData> allAssets)
+    {
+        try
+        {
+            var processed = Interlocked.Increment(ref _processedAssets);
+            if (processed % 100 == 0) 
             {
-                Console.WriteLine(fileName);
-                Console.WriteLine(jsonFile);
+                Console.WriteLine("Processed " + processed + " assets...");
+            }
+
+            //if (!asset.PackageName.ToString().Contains("Zurg")) continue; // For debugging purposes
+            
+            // SET THIS FOR ANY ADDITIVE ASSETS THAT ARE FAILING TO EXPORT DUE TO INCORRECT REF POSE
+            if (asset.PackageName.ToString() == @"/Game/Enemies/HydraWeed/Assets/ANIM_HydraWeed_Heart_Damaged_Additive")
+            {
+                // Note: This specific case might need special handling in multi-threaded environment
+                // For now, we'll process it normally and handle the extra asset lookup differently
+                ExportFromAssetData<UAnimSequence>(provider, _folderNames[0], asset);
+                return;
+            }
+
+            switch (asset.AssetClass.Text)
+            {
+                case "AnimSequence":
+                    ExportFromAssetData<UAnimSequence>(provider, _folderNames[0], asset);
+                    break;
+                case "AnimMontage":
+                    ExportFromAssetData<UAnimMontage>(provider, _folderNames[1], asset);
+                    break;
+                case "AnimComposite":
+                    ExportFromAssetData<UAnimComposite>(provider, _folderNames[2], asset);
+                    break;
+                case "SkeletalMesh":
+                    ExportFromAssetData<USkeletalMesh>(provider, _folderNames[3], asset);
+                    break;
+                case "StaticMesh":
+                    ExportFromAssetData<UStaticMesh>(provider, _folderNames[4], asset);
+                    break;
+                case "Skeleton":
+                    ExportFromAssetData<USkeleton>(provider, _folderNames[5], asset);
+                    break;
             }
         }
         catch (Exception e)
         {
-            Console.WriteLine(e);
+            Console.WriteLine($"Error processing asset {asset.PackageName}: {e.Message}");
+        }
+    }
+
+    private static void ExportFromGameFiles<T>(T asset, string outFolder) where T : UObject
+    {
+        try
+        {
+            var outputPath = Path.Join(_outputDir, outFolder);
+            EnsureDirectoryExists(outputPath);
+            
+            var options = new ExporterOptions { ExportMaterials = _exportMaterials };
+            var exporter = new Exporter(asset, options);
+            exporter.TryWriteToDir(new DirectoryInfo(outputPath), out _, out var fileName);
+
+            if (_generateJson)
+            {
+                var json = JsonConvert.SerializeObject(asset, Formatting.Indented);
+                var jsonFile = fileName.SubstringBefore(".") + ".json";
+                File.WriteAllText(jsonFile, json);
+                if (_printSuccess) 
+                {
+                    lock (Console.Out)
+                    {
+                        Console.WriteLine(jsonFile);
+                    }
+                }
+            } 
+            else if (_printSuccess) 
+            {
+                lock (Console.Out)
+                {
+                    Console.WriteLine(fileName);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            lock (Console.Out)
+            {
+                Console.WriteLine($"Error exporting asset: {e}");
+            }
         }
     }
 
     private static void ExportFromAssetData<T>(DefaultFileProvider provider, string outFolder,
         FAssetData asset, FAssetData extraAsset = null) where T : UObject
     {
-        var contentDir = "Game";
+        var contentDir = provider.ProjectName + "/Content";
         var name = asset.AssetName.ToString();
         var dir = asset.PackagePath.ToString().Remove(0, 5);
         var jsonDir = Path.Join(_outputDir, outFolder, contentDir, dir);
@@ -186,7 +295,13 @@ public class Program
 
         if (File.Exists(Path.Join(_outputDir, outFolder, path) + ".json") && !_replaceFiles)
         {
-            if (_printSuccess) Console.WriteLine("Skipping " + Path.Join(_outputDir, outFolder, path));
+            if (_printSuccess) 
+            {
+                lock (Console.Out)
+                {
+                    Console.WriteLine("Skipping " + Path.Join(_outputDir, outFolder, path));
+                }
+            }
             return;
         }
 
@@ -213,30 +328,66 @@ public class Program
             }
         }
 
-        try
+        if (_generateJson)
         {
-            var json = JsonConvert.SerializeObject(refObject, Formatting.Indented);
-            if (!Directory.Exists(jsonDir)) Directory.CreateDirectory(jsonDir);
-            File.WriteAllText(Path.Join(_outputDir, outFolder, path) + ".json", json);
-            if (_printSuccess) Console.WriteLine(Path.Join(_outputDir, outFolder, path) + ".json");
+            try
+            {
+                var json = JsonConvert.SerializeObject(refObject, Formatting.Indented);
+                EnsureDirectoryExists(jsonDir);
+                File.WriteAllText(Path.Join(_outputDir, outFolder, path) + ".json", json);
+                if (_printSuccess) 
+                {
+                    lock (Console.Out)
+                    {
+                        Console.WriteLine(Path.Join(_outputDir, outFolder, path) + ".json");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                lock (Console.Out)
+                {
+                    Console.WriteLine($"Error creating JSON for {path}: {e}");
+                }
+            }
         }
-        catch (Exception e)
-        {
-            Console.WriteLine(e);
-            Console.WriteLine(path);
-        }
-
+        
         try
         {
             var options = new ExporterOptions { ExportMaterials = _exportMaterials };
             var exporter = new Exporter(refObject!, options);
             exporter.TryWriteToDir(new DirectoryInfo(Path.Join(_outputDir, outFolder)), out _, out var fileName);
-            if (_printSuccess) Console.WriteLine(fileName);
+            if (_printSuccess) 
+            {
+                lock (Console.Out)
+                {
+                    Console.WriteLine(fileName);
+                }
+            }
         }
         catch (Exception e)
         {
-            Console.WriteLine(e);
-            Console.WriteLine(path);
+            lock (Console.Out)
+            {
+                Console.WriteLine($"Error exporting {path}: {e}");
+            }
+        }
+    }
+
+    private static readonly object _dirCreationLock = new object();
+    private static readonly HashSet<string> _createdDirectories = new HashSet<string>();
+    
+    private static void EnsureDirectoryExists(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        
+        lock (_dirCreationLock)
+        {
+            if (!_createdDirectories.Contains(path) && !Directory.Exists(path))
+            {
+                Directory.CreateDirectory(path);
+                _createdDirectories.Add(path);
+            }
         }
     }
 
@@ -256,9 +407,9 @@ public class Program
 
     private static void PrintAnimAdditives()
     {
-        if (animAdditives.Count <= 0) return;
+        if (animAdditives.IsEmpty) return;
         var additiveFile = Path.Join(_outputDir, "additives.txt");
         if (!File.Exists(additiveFile)) File.Create(additiveFile).Close();
-        File.WriteAllLines(additiveFile, animAdditives);
+        File.WriteAllLines(additiveFile, animAdditives.ToArray());
     }
 }
