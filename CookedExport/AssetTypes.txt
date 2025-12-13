@@ -1,0 +1,16 @@
+﻿# Asset types to export (one per line)
+# Lines starting with # or // are comments
+
+StaticMesh
+SkeletalMesh
+Skeleton
+Material
+MaterialInstanceConstant
+MaterialInstance
+MaterialFunction
+Texture2D
+TextureCube
+TextureRenderTarget2D
+SoundWave
+ParticleSystem
+
