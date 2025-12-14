@@ -27,8 +27,11 @@ public class Program
     private static bool _printSkipped = false;
     private static bool _useMultiThreading = true;
     private static int _maxDegreeOfParallelism = -1;
+    private static bool _listAssetTypes = false;
     
-    private static HashSet<string> _assetTypesToCopy = new(StringComparer.OrdinalIgnoreCase);
+    private const string AssetTypesList = "DiscoveredAssetTypes.txt";
+    
+    private static readonly HashSet<string> _assetTypesToCopy = new(StringComparer.OrdinalIgnoreCase);
     
     private static readonly Dictionary<string, int> _copiedCounts = new();
     private static readonly object _countLock = new object();
@@ -47,7 +50,24 @@ public class Program
                 return;
             }
 
-            // Load asset types from file
+            Console.WriteLine($"Source: {_pakDir}");
+            if (!string.IsNullOrEmpty(_mapping))
+                Console.WriteLine($"Mapping: {_mapping}");
+            Console.WriteLine($"Version: {_version}");
+            Console.WriteLine();
+
+            // If in list mode, just list asset types and exit
+            if (_listAssetTypes)
+            {
+                Console.WriteLine("Scanning pak files for asset types...\n");
+                await ListAssetTypes();
+                Console.WriteLine($"\nAsset types have been written to: {AssetTypesList}");
+                Console.WriteLine("\nPress any key to exit...");
+                Console.ReadKey();
+                return;
+            }
+
+            // Load asset types from file for export mode
             var assetTypesFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AssetTypes.txt");
             if (!LoadAssetTypesFromFile(assetTypesFile))
             {
@@ -57,13 +77,7 @@ public class Program
                 return;
             }
 
-            Console.WriteLine($"Source: {_pakDir}");
             Console.WriteLine($"Target: {_projectDir}");
-            if (!string.IsNullOrEmpty(_mapping))
-                Console.WriteLine($"Mapping: {_mapping}");
-            Console.WriteLine($"Version: {_version}");
-            Console.WriteLine();
-            
             Console.WriteLine($"Asset Types Enabled ({_assetTypesToCopy.Count}):");
             foreach (var assetType in _assetTypesToCopy.OrderBy(x => x))
             {
@@ -174,6 +188,11 @@ public class Program
                     _printSkipped = true;
                     break;
                 
+                case "--list-asset-types":
+                case "-l":
+                    _listAssetTypes = true;
+                    break;
+                
                 case "--help":
                 case "-h":
                 case "/?":
@@ -192,7 +211,8 @@ public class Program
             return false;
         }
 
-        if (string.IsNullOrEmpty(_projectDir))
+        // Output directory is not required when listing asset types
+        if (!_listAssetTypes && string.IsNullOrEmpty(_projectDir))
         {
             Console.WriteLine("Error: --output is required");
             return false;
@@ -227,6 +247,7 @@ public class Program
         Console.WriteLine("  --print-success           Print successful copies (default: true)");
         Console.WriteLine("  --no-print-success        Don't print successful copies");
         Console.WriteLine("  --print-skipped           Print skipped assets");
+        Console.WriteLine("  --list-asset-types, -l    List all asset types in pak files and exit");
         Console.WriteLine("  --help, -h                Show this help message");
         Console.WriteLine();
         Console.WriteLine("Asset types to export should be listed in AssetTypes.txt (one per line)");
@@ -243,8 +264,7 @@ public class Program
             if (!File.Exists(filePath))
             {
                 Console.WriteLine($"Asset types file not found: {filePath}");
-                Console.WriteLine("Creating default AssetTypes.txt...");
-                CreateDefaultAssetTypesFile(filePath);
+                return false;
             }
 
             var lines = File.ReadAllLines(filePath);
@@ -275,39 +295,62 @@ public class Program
         }
     }
 
-    private static void CreateDefaultAssetTypesFile(string filePath)
+    private static async Task ListAssetTypes()
     {
-        var defaultTypes = new[]
-        {
-            "# Asset types to export (one per line)",
-            "# Lines starting with # or // are comments",
-            "",
-            "StaticMesh",
-            "SkeletalMesh",
-            "Skeleton",
-            "Material",
-            "MaterialInstanceConstant",
-            "MaterialInstance",
-            "MaterialFunction",
-            "Texture2D",
-            "TextureCube",
-            "TextureRenderTarget2D",
-            "SoundWave",
-            "ParticleSystem"
-        };
-
-        File.WriteAllLines(filePath, defaultTypes);
-        Console.WriteLine($"Created default asset types file at: {filePath}");
+        var provider = new DefaultFileProvider(_pakDir, SearchOption.TopDirectoryOnly,
+            new VersionContainer(_version), StringComparer.OrdinalIgnoreCase);
         
-        // Load the default types
-        foreach (var type in defaultTypes)
+        if (!string.IsNullOrEmpty(_mapping)) 
+            provider.MappingsContainer = new FileUsmapTypeMappingsProvider(_mapping);
+        
+        provider.Initialize();
+        
+        if (!string.IsNullOrEmpty(_aesKey)) 
+            await provider.SubmitKeyAsync(new FGuid(), new FAesKey(_aesKey));
+        
+        await provider.MountAsync();
+
+        List<FAssetData> assets = new();
+        var assetRegistryPath = $"{provider.ProjectName}/AssetRegistry.bin";
+        
+        if (provider.TryGetGameFile(assetRegistryPath, out var assetRegistryFile))
         {
-            var trimmed = type.Trim();
-            if (!string.IsNullOrWhiteSpace(trimmed) && !trimmed.StartsWith("#") && !trimmed.StartsWith("//"))
+            var assetArchive = await assetRegistryFile.SafeCreateReaderAsync();
+            if (assetArchive is not null)
             {
-                _assetTypesToCopy.Add(trimmed);
+                assets.AddRange(new FAssetRegistryState(assetArchive).PreallocatedAssetDataBuffers);
             }
         }
+
+        var gameAssets = assets.Where(asset => asset.PackagePath.ToString().StartsWith("/Game")).ToList();
+        Console.WriteLine($"Found {gameAssets.Count} assets in registry...\n");
+
+        // Collect all unique asset types with counts
+        var assetTypeCounts = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        
+        foreach (var asset in gameAssets)
+        {
+            var assetClass = asset.AssetClass.Text;
+            assetTypeCounts.AddOrUpdate(assetClass, 1, (key, oldValue) => oldValue + 1);
+        }
+
+        // Write to file
+        var sortedAssetTypes = assetTypeCounts.OrderBy(kvp => kvp.Key).ToList();
+        
+        var outputPath = Path.IsPathRooted(AssetTypesList) 
+            ? AssetTypesList 
+            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, AssetTypesList);
+
+        using (var writer = new StreamWriter(outputPath))
+        {
+            foreach (var kvp in sortedAssetTypes)
+            {
+                writer.WriteLine($"{kvp.Key}");
+                Console.WriteLine($"  {kvp.Key}: {kvp.Value} assets");
+            }
+        }
+
+        Console.WriteLine($"\nTotal unique asset types: {sortedAssetTypes.Count}");
     }
 
     private static async Task ExportAssets()
