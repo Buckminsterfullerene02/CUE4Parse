@@ -399,3 +399,6 @@ FodyWeavers.xsd
 *.idea
 
 build
+
+!CookedExport/dist/CookedExport.pdb
+!CookedExport/dist/CUE4Parse.pdb
