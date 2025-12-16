@@ -402,3 +402,5 @@ build
 
 !CookedExport/dist/CookedExport.pdb
 !CookedExport/dist/CUE4Parse.pdb
+!CookedExport/dist/CUE4Parse-Conversion.pdb
+CookedExport/dist/ExtractedTextures/

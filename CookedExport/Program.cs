@@ -11,8 +11,10 @@ using CUE4Parse.FileProvider.Objects;
 using CUE4Parse.MappingsProvider;
 using CUE4Parse.UE4.AssetRegistry;
 using CUE4Parse.UE4.AssetRegistry.Objects;
+using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Versions;
+using CUE4Parse_Conversion.Textures;
 
 public class Program
 {
@@ -28,6 +30,8 @@ public class Program
     private static bool _useMultiThreading = true;
     private static int _maxDegreeOfParallelism = -1;
     private static bool _listAssetTypes = false;
+    private static bool _extractTextures = false;
+    private static ETexturePlatform _texturePlatform = ETexturePlatform.DesktopMobile;
     
     private const string AssetTypesList = "DiscoveredAssetTypes.txt";
     
@@ -62,6 +66,16 @@ public class Program
                 Console.WriteLine("Scanning pak files for asset types...\n");
                 await ListAssetTypes();
                 Console.WriteLine($"\nAsset types have been written to: {AssetTypesList}");
+                Console.WriteLine("\nPress any key to exit...");
+                Console.ReadKey();
+                return;
+            }
+
+            // If in extract textures mode, extract all textures as PNG and exit
+            if (_extractTextures)
+            {
+                Console.WriteLine("Extracting all textures as PNG...\n");
+                await ExtractTextures();
                 Console.WriteLine("\nPress any key to exit...");
                 Console.ReadKey();
                 return;
@@ -193,6 +207,11 @@ public class Program
                     _listAssetTypes = true;
                     break;
                 
+                case "--extract-textures":
+                case "-e":
+                    _extractTextures = true;
+                    break;
+                
                 case "--help":
                 case "-h":
                 case "/?":
@@ -212,7 +231,7 @@ public class Program
         }
 
         // Output directory is not required when listing asset types
-        if (!_listAssetTypes && string.IsNullOrEmpty(_projectDir))
+        if (!_listAssetTypes && !_extractTextures && string.IsNullOrEmpty(_projectDir))
         {
             Console.WriteLine("Error: --output is required");
             return false;
@@ -248,6 +267,7 @@ public class Program
         Console.WriteLine("  --no-print-success        Don't print successful copies");
         Console.WriteLine("  --print-skipped           Print skipped assets");
         Console.WriteLine("  --list-asset-types, -l    List all asset types in pak files and exit");
+        Console.WriteLine("  --extract-textures, -e    Extract all textures as PNG files");
         Console.WriteLine("  --help, -h                Show this help message");
         Console.WriteLine();
         Console.WriteLine("Asset types to export should be listed in AssetTypes.txt (one per line)");
@@ -351,6 +371,182 @@ public class Program
         }
 
         Console.WriteLine($"\nTotal unique asset types: {sortedAssetTypes.Count}");
+    }
+
+    private static async Task ExtractTextures()
+    {
+        var provider = new DefaultFileProvider(_pakDir, SearchOption.TopDirectoryOnly,
+            new VersionContainer(_version, _texturePlatform), StringComparer.OrdinalIgnoreCase);
+        
+        if (!string.IsNullOrEmpty(_mapping)) 
+            provider.MappingsContainer = new FileUsmapTypeMappingsProvider(_mapping);
+        
+        provider.Initialize();
+        
+        if (!string.IsNullOrEmpty(_aesKey)) 
+            await provider.SubmitKeyAsync(new FGuid(), new FAesKey(_aesKey));
+        
+        await provider.MountAsync();
+
+        // Determine output directory
+        var outputDir = string.IsNullOrEmpty(_projectDir) 
+            ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ExtractedTextures")
+            : _projectDir;
+
+        Console.WriteLine($"Output directory: {outputDir}\n");
+
+        List<FAssetData> assets = new();
+        var assetRegistryPath = $"{provider.ProjectName}/AssetRegistry.bin";
+        
+        if (provider.TryGetGameFile(assetRegistryPath, out var assetRegistryFile))
+        {
+            var assetArchive = await assetRegistryFile.SafeCreateReaderAsync();
+            if (assetArchive is not null)
+            {
+                assets.AddRange(new FAssetRegistryState(assetArchive).PreallocatedAssetDataBuffers);
+            }
+        }
+
+        // Filter for texture assets
+        var textureAssets = assets.Where(asset => 
+            asset.PackagePath.ToString().StartsWith("/Game") &&
+            (asset.AssetClass.Text.Equals("Texture2D", StringComparison.OrdinalIgnoreCase) ||
+             asset.AssetClass.Text.Equals("TextureCube", StringComparison.OrdinalIgnoreCase) ||
+             asset.AssetClass.Text.Equals("Texture2DArray", StringComparison.OrdinalIgnoreCase) ||
+             asset.AssetClass.Text.Equals("TextureRenderTarget2D", StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        Console.WriteLine($"Found {textureAssets.Count} texture assets in registry...\n");
+
+        var parallelOptions = new ParallelOptions();
+        if (_useMultiThreading && _maxDegreeOfParallelism > 0)
+        {
+            parallelOptions.MaxDegreeOfParallelism = _maxDegreeOfParallelism;
+        }
+        else if (!_useMultiThreading)
+        {
+            parallelOptions.MaxDegreeOfParallelism = 1;
+        }
+
+        var successCount = 0;
+        var failCount = 0;
+
+        if (_useMultiThreading)
+        {
+            Parallel.ForEach(textureAssets, parallelOptions, asset =>
+            {
+                if (ExtractTexture(provider, asset, outputDir))
+                    Interlocked.Increment(ref successCount);
+                else
+                    Interlocked.Increment(ref failCount);
+            });
+        }
+        else
+        {
+            foreach (var asset in textureAssets)
+            {
+                if (ExtractTexture(provider, asset, outputDir))
+                    successCount++;
+                else
+                    failCount++;
+            }
+        }
+
+        Console.WriteLine($"\nExtraction complete!");
+        Console.WriteLine($"Successfully extracted: {successCount}");
+        Console.WriteLine($"Failed: {failCount}");
+    }
+
+    private static bool ExtractTexture(DefaultFileProvider provider, FAssetData asset, string outputDir)
+    {
+        try
+        {
+            var processed = Interlocked.Increment(ref _processedAssets);
+            if (processed % 100 == 0)
+            {
+                Console.WriteLine($"Processed {processed} textures...");
+            }
+
+            var contentDir = provider.ProjectName + "/Content";
+            var name = asset.AssetName.ToString();
+            var dir = asset.PackagePath.ToString().Remove(0, 5); // Remove "/Game"
+            var assetPath = Path.Join(contentDir, dir, name).Replace(Path.DirectorySeparatorChar, '/');
+
+            // Load the texture object directly
+            if (!provider.TryLoadPackageObject<UTexture>(assetPath, out var texture))
+            {
+                if (_printSkipped)
+                {
+                    lock (Console.Out)
+                    {
+                        Console.WriteLine($"[SKIP] Could not load texture: {name}");
+                    }
+                }
+                return false;
+            }
+
+            // Decode the texture
+            var bitmap = texture.Decode(_texturePlatform);
+            if (bitmap == null)
+            {
+                lock (Console.Out)
+                {
+                    Console.WriteLine($"[FAIL] Could not decode texture: {name}");
+                }
+                return false;
+            }
+
+            // Handle special texture types
+            if (texture is UTextureCube)
+            {
+                bitmap = bitmap.ToPanorama();
+            }
+
+            // Encode to PNG
+            var pngBytes = bitmap.Encode(ETextureFormat.Png, false, out var extension);
+
+            // Build output path
+            var relativePath = dir.TrimStart('/');
+            var targetDir = Path.Combine(outputDir, relativePath);
+            EnsureDirectoryExists(targetDir);
+
+            var targetPath = Path.Combine(targetDir, $"{name}.{extension}");
+
+            // Skip if file exists and not replacing
+            if (!_replaceExisting && File.Exists(targetPath))
+            {
+                Interlocked.Increment(ref _skippedAssets);
+                if (_printSkipped)
+                {
+                    lock (Console.Out)
+                    {
+                        Console.WriteLine($"[SKIP] Already exists: {name}");
+                    }
+                }
+                return false;
+            }
+
+            // Write the PNG file
+            File.WriteAllBytes(targetPath, pngBytes);
+
+            if (_printSuccess)
+            {
+                lock (Console.Out)
+                {
+                    Console.WriteLine($"[EXPORT] {name}.{extension} ({bitmap.Width}x{bitmap.Height})");
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            lock (Console.Out)
+            {
+                Console.WriteLine($"[ERROR] Failed to extract {asset.AssetName}: {ex.Message}");
+            }
+            return false;
+        }
     }
 
     private static async Task ExportAssets()
