@@ -25,7 +25,30 @@ public class UInstancedStaticMeshComponent : UStaticMeshComponent
             bCooked = Ar.ReadBoolean();
         }
 
+        if (Ar.Game is EGame.GAME_WutheringWaves && Ar.ReadFlag())
+        {
+            Ar.Position += 12;
+            var len = Ar.Read<int>();
+            for (int i = 0; i < len; i++)
+            {
+                Ar.Position += 12;
+                Ar.Position += Ar.ReadFlag() ? 3 : 7;
+            }
+
+            Ar.SkipFixedArray(4);
+            PerInstanceSMCustomData = Ar.ReadBulkArray(Ar.Read<float>);
+            Ar.Position += Ar.Read<long>()+8;
+            PerInstanceSMData = Ar.ReadBulkArray(() => new FInstancedStaticMeshInstanceData(Ar));
+            return;
+        }
+
         var bHasSkipSerializationPropertiesData = FFortniteMainBranchObjectVersion.Get(Ar) < FFortniteMainBranchObjectVersion.Type.ISMComponentEditableWhenInheritedSkipSerialization || Ar.ReadBoolean();
+        if (Ar.Game is EGame.GAME_HonorofKingsWorld)
+        {
+            CustomGameData = Ar.ReadBoolean();
+            bHasSkipSerializationPropertiesData = Ar.ReadBoolean();
+        }
+
         if (bHasSkipSerializationPropertiesData)
         {
             switch (Ar.Game)
@@ -75,7 +98,7 @@ public class UInstancedStaticMeshComponent : UStaticMeshComponent
                     break;
             };
 
-            if (FRenderingObjectVersion.Get(Ar) >= FRenderingObjectVersion.Type.PerInstanceCustomData || Ar.Game == EGame.GAME_DeltaForceHawkOps)
+            if (FRenderingObjectVersion.Get(Ar) >= FRenderingObjectVersion.Type.PerInstanceCustomData || Ar.Game == EGame.GAME_DeltaForce)
             {
                 PerInstanceSMCustomData = Ar.ReadBulkArray(Ar.Read<float>);
             }
@@ -109,11 +132,13 @@ public class UInstancedStaticMeshComponent : UStaticMeshComponent
                 return;
             }
 
+            if (Ar.Game is EGame.GAME_AssaultFireFuture) Ar.SkipBulkArrayData();
+
             var renderDataSizeBytes = Ar.Read<ulong>();
             Ar.Position += (long) renderDataSizeBytes;
         }
 
-        if (Ar.Game == EGame.GAME_Valorant) Ar.Position += 4;
+        if (Ar.Game is EGame.GAME_Valorant) Ar.Position += 4;
     }
 
     public FInstancedStaticMeshInstanceData[] GetInstances() // PerInstanceSMData

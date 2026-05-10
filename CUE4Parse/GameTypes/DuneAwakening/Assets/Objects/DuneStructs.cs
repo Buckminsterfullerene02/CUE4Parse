@@ -6,6 +6,9 @@ using CUE4Parse.UE4.Assets.Objects.Properties;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.UObject;
+using CUE4Parse.UE4.Versions;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Converters;
 
 namespace CUE4Parse.GameTypes.DuneAwakening.Assets.Objects;
 
@@ -41,7 +44,8 @@ public static class DAStructs
         {
             "BodyInstance" => new FBodyInstance(Ar),
             "GenericTeamId" => new FGenericTeamId(Ar),
-            "UniqueID" or "Persistence_DEPRECATED_Id" or "PersistenceActorId" => new FUniqueID(Ar),
+            "UniqueID" or "Persistence_DEPRECATED_Id" or "PersistenceActorId"
+                or "PersistenceItemId" or "PersistenceBuildingBlueprintId" => new FUniqueID(Ar),
             "BotAutoBorderCrossingConfig" => new FBotAutoBorderCrossingConfig(Ar),
             "StringEnumValue" => new FStringEnumValue(Ar),
 
@@ -85,6 +89,7 @@ public struct FStringEnumValue(FAssetArchive Ar) : IUStruct
     public FName Name = Ar.ReadFName();
 }
 
+[JsonConverter(typeof(StringEnumConverter))]
 public enum ECollisionResponse : byte
 {
     Ignore = 0,
@@ -112,9 +117,15 @@ public struct FBodyInstance : IUStruct
             ResponseArray[names[i]] = (ECollisionResponse) values[i];
         }
         Flags = Ar.Read<ulong>();
-
-        SomeVector = Ar.Read<FVector>();
-        Ar.Position += 96; // some floats/vectors and maybe some enum array at the end
-        Scale = new FVector(Ar);
+        if (Ar.Game is EGame.GAME_DuneAwakening)
+        {
+            SomeVector = Ar.Read<FVector>();
+            Ar.Position += 96; // some floats/vectors and maybe some enum array at the end
+            Scale = new FVector(Ar);
+        }
+        else if (Ar.Game is EGame.GAME_ConanExilesEnhanced)
+        {
+            Ar.Position += 114;
+        }
     }
 }

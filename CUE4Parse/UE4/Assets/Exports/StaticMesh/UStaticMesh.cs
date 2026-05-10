@@ -6,7 +6,6 @@ using CUE4Parse.UE4.Objects.Engine;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
 using Newtonsoft.Json;
-using Serilog;
 
 namespace CUE4Parse.UE4.Assets.Exports.StaticMesh;
 
@@ -29,7 +28,7 @@ public class UStaticMesh : UObject
         Materials = [];
         LODForCollision = GetOrDefault(nameof(LODForCollision), 0);
 
-        var stripDataFlags = Ar.Read<FStripDataFlags>();
+        var stripDataFlags = new FStripDataFlags(Ar);
         bCooked = Ar.ReadBoolean();
         BodySetup = new FPackageIndex(Ar);
 
@@ -58,7 +57,7 @@ public class UStaticMesh : UObject
         {
             return; // so it doesn't throw
         }
-        
+
         // https://github.com/EpicGames/UnrealEngine/blob/ue5-main/Engine/Source/Runtime/Engine/Private/StaticMesh.cpp#L6701
         if (bCooked)
         {
@@ -75,6 +74,8 @@ public class UStaticMesh : UObject
             Ar.Position += 64; // 8 per-platform floats
         }
 
+        if (Ar.Game is EGame.GAME_RocoKingdomWorld) Ar.Position += 4;
+
         if (bCooked && Ar.Game is >= EGame.GAME_UE4_20 and < EGame.GAME_UE5_0 && Ar.Game != EGame.GAME_DreamStar) // DS removed this for some reason
         {
             var bHasOccluderData = Ar.ReadBoolean();
@@ -84,23 +85,21 @@ public class UStaticMesh : UObject
                 {
                     case EGame.GAME_CrystalOfAtlan:
                     case EGame.GAME_FragPunk:
+                    case EGame.GAME_RocoKingdomWorld:
                         if (Ar.Game is EGame.GAME_FragPunk && !Ar.ReadBoolean()) break;
-                        Ar.SkipBulkArrayData();
-                        Ar.SkipBulkArrayData();
-                        Ar.SkipBulkArrayData();
+                        Ar.SkipMultipleBulkArrayData(3);
                         break;
                     case EGame.GAME_Farlight84:
                     {
-                        Ar.SkipBulkArrayData();
-                        Ar.SkipBulkArrayData();
+                        Ar.SkipMultipleBulkArrayData(2);
                         var count = Ar.Read<int>();
                         for (var i = 0; i < count; i++)
-                        {
-                            Ar.SkipBulkArrayData();
-                            Ar.SkipBulkArrayData();
-                        }
+                            Ar.SkipMultipleBulkArrayData(2);
                         break;
                     }
+                    case EGame.GAME_HonorofKingsWorld:
+                        Ar.SkipBulkArrayData();
+                        break;
                     default:
                         Ar.SkipFixedArray(12); // Vertices
                         Ar.SkipFixedArray(2); // Indices
@@ -109,7 +108,8 @@ public class UStaticMesh : UObject
             }
         }
 
-        if (Ar.Game is EGame.GAME_FateTrigger or EGame.GAME_GhostsofTabor) Ar.Position += 4;
+        if (Ar.Game is EGame.GAME_FateTrigger or EGame.GAME_GhostsofTabor or EGame.GAME_Aion2) Ar.Position += 4;
+        if (Ar.Game is EGame.GAME_TheFinals or EGame.GAME_ArcRaiders && Ar.ReadBoolean()) Ar.SkipMultipleBulkArrayData(5);
 
         if (Ar.Game >= EGame.GAME_UE4_14)
         {
@@ -123,7 +123,7 @@ public class UStaticMesh : UObject
             if (FEditorObjectVersion.Get(Ar) >= FEditorObjectVersion.Type.RefactorMeshEditorMaterials)
             {
                 // UE4.14+ - "Materials" are deprecated, added StaticMaterials
-                StaticMaterials = bHasSpeedTreeWind ? GetOrDefault("StaticMaterials",  Array.Empty<FStaticMaterial>()) : Ar.ReadArray(() => new FStaticMaterial(Ar));
+                StaticMaterials = bHasSpeedTreeWind ? GetOrDefault("StaticMaterials", Array.Empty<FStaticMaterial>()) : Ar.ReadArray(() => new FStaticMaterial(Ar));
 
                 Materials = new ResolvedObject[StaticMaterials.Length];
                 for (var i = 0; i < Materials.Length; i++)

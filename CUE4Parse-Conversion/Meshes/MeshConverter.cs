@@ -114,7 +114,7 @@ public static class MeshConverter
                 {
                     if (srcLod.IndexBuffer?.Buffer == null)
                         throw new ParserException("Static mesh LOD has no index buffer");
-                    
+
                     var copy = new uint[srcLod.IndexBuffer.Buffer.Length];
                     Array.Copy(srcLod.IndexBuffer.Buffer, copy, copy.Length);
                     return copy;
@@ -149,8 +149,6 @@ public static class MeshConverter
             for (var j = 0; j < numVerts; j++)
             {
                 var suv = srcLod.VertexBuffer.UV[j];
-                if (suv.Normal[1].Data != 0)
-                    throw new ParserException("Not implemented: should only be used in UE3");
 
                 var pos = srcLod.PositionVertexBuffer.Verts[j];
                 if (spline != null) // TODO normals
@@ -179,7 +177,9 @@ public static class MeshConverter
             convertedMesh.LODs.Add(staticMeshLod);
         }
 
-        if (naniteFormat != ENaniteMeshFormat.OnlyNormalLODs && TryConvertNaniteMesh(originalMesh, out CStaticMeshLod? naniteMesh) && naniteMesh is not null)
+        var lodsCount = convertedMesh.LODs.Count;
+        if ((lodsCount == 0 || naniteFormat != ENaniteMeshFormat.OnlyNormalLODs)
+            && TryConvertNaniteMesh(originalMesh, out CStaticMeshLod? naniteMesh) && naniteMesh is not null)
         {
             switch (naniteFormat)
             {
@@ -192,6 +192,9 @@ public static class MeshConverter
                     convertedMesh.LODs.Insert(0, naniteMesh);
                     break;
                 case ENaniteMeshFormat.AllLayersNaniteLast:
+                    convertedMesh.LODs.Add(naniteMesh);
+                    break;
+                case ENaniteMeshFormat.OnlyNormalLODs when lodsCount == 0:
                     convertedMesh.LODs.Add(naniteMesh);
                     break;
             }
@@ -398,7 +401,7 @@ public static class MeshConverter
                 {
                     if (srcLod.Indices?.Buffer == null)
                         throw new ParserException("Skeletal mesh LOD has no index buffer");
-                    
+
                     var copy = new uint[srcLod.Indices.Buffer.Length];
                     Array.Copy(srcLod.Indices.Buffer, copy, copy.Length);
                     return copy;
@@ -563,11 +566,7 @@ public static class MeshConverter
         v.Tangent = normal[0];
         v.Normal = normal[2];
 
-        // new UE3 version - binormal is not serialized and restored in vertex shader
-        if (normal[1] is not null && normal[1].Data != 0)
-        {
-            throw new NotImplementedException();
-        }
+        // UE3 - normal[1] not restored in vertex shader
     }
 
     public static bool TryConvert(this ALandscapeProxy landscape, ULandscapeComponent[]? landscapeComponents, ELandscapeExportFlags flags, out CStaticMesh? convertedMesh, out Dictionary<string,Image> heightMaps, out Dictionary<string, SKBitmap> weightMaps)

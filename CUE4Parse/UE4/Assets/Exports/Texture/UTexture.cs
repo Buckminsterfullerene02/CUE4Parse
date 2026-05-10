@@ -64,7 +64,7 @@ public abstract class UTexture : UUnrealMaterial, IAssetUserData
 
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
-        if(Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 16;
+        if (Ar.Game is EGame.GAME_WorldofJadeDynasty or EGame.GAME_RocoKingdomWorld) Ar.Position += 16;
         base.Deserialize(Ar, validPos);
         LightingGuid = GetOrDefault(nameof(LightingGuid), new FGuid((uint) GetFullName().GetHashCode()));
         CompressionSettings = GetOrDefault(nameof(CompressionSettings), TextureCompressionSettings.TC_Default);
@@ -73,7 +73,7 @@ public abstract class UTexture : UUnrealMaterial, IAssetUserData
         SRGB = GetOrDefault(nameof(SRGB), true);
         AssetUserData = GetOrDefault<FPackageIndex[]>(nameof(AssetUserData), []);
 
-        var stripFlags = Ar.Read<FStripDataFlags>();
+        var stripFlags = new FStripDataFlags(Ar);
 
         // If archive is has editor only data
         if (!stripFlags.IsEditorDataStripped())
@@ -115,11 +115,11 @@ public abstract class UTexture : UUnrealMaterial, IAssetUserData
             {
                 //?? check whether we can support this pixel format
 #if DEBUG
-                Log.Debug("Loading data for format {Format}", pixelFormatName);
+                //Log.Debug("Loading data for format {Format}", pixelFormatName);
 #endif
                 PlatformData = new FTexturePlatformData(Ar, this, bSerializeMipData);
 
-                if (Ar.Game is EGame.GAME_SeaOfThieves or EGame.GAME_DeltaForceHawkOps) Ar.Position += 4;
+                if (Ar.Game is EGame.GAME_SeaOfThieves or EGame.GAME_DeltaForce) Ar.Position += 4;
 
                 if (Ar.AbsolutePosition != skipOffset)
                 {
@@ -187,6 +187,47 @@ public abstract class UTexture : UUnrealMaterial, IAssetUserData
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public FTexture2DMipMap? GetFirstMip() => PlatformData.Mips.Where((t, i) => t.EnsureValidBulkData(MipDataProvider, i)).FirstOrDefault();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int GetFirstMipIndex()
+    {
+        for (var i = 0; i < PlatformData.Mips.Length; i++)
+        {
+            var mip = PlatformData.Mips[i];
+            if (mip.EnsureValidBulkData(MipDataProvider, i))
+                return i;
+        }
+
+        return -1;
+    }
+
+    public int GetMipIndexByMaxSize(int maxXSize, int maxYSize = -1)
+    {
+        if (maxYSize == -1)
+            maxYSize = maxXSize;
+
+        if (PlatformData is { FirstMipToSerialize: >= 0, VTData: { } vt } && vt.IsInitialized())
+        {
+            var tileSize = vt.TileSize;
+            for (var i = 0; i < vt.NumMips; i++)
+            {
+                var tileOffsetData = vt.GetTileOffsetData(i);
+                if ((tileOffsetData.Width * tileSize <= maxXSize || tileOffsetData.Height * tileSize <= maxYSize))
+                    return i;
+
+            }
+            return -1;
+        }
+
+        for (var i = 0; i < PlatformData.Mips.Length; i++)
+        {
+            var mip = PlatformData.Mips[i];
+            if ((mip.SizeX <= maxXSize || mip.SizeY <= maxYSize) && mip.EnsureValidBulkData(MipDataProvider, i))
+                return i;
+        }
+
+        return GetFirstMipIndex();
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public FTexture2DMipMap? GetMipByMaxSize(int maxSize)

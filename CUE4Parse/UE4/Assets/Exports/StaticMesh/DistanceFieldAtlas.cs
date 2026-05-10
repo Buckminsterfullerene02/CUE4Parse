@@ -102,10 +102,17 @@ namespace CUE4Parse.UE4.Assets.Exports.StaticMesh
 
         public FDistanceFieldVolumeData5(FAssetArchive Ar)
         {
-            LocalSpaceMeshBounds = Ar.Game >= EGame.GAME_UE5_4 ? new FBox(Ar.Read<FVector>(), Ar.Read<FVector>(), Ar.Read<byte>()) : new FBox(Ar);
+            LocalSpaceMeshBounds = Ar.Game >= EGame.GAME_UE5_4 || Ar.Game is EGame.GAME_Highguard ? Ar.Read<FBox>() : new FBox(Ar);
             bMostlyTwoSided = Ar.ReadBoolean();
-            Mips = Ar.ReadArray(DistanceField.NumMips, () => new FSparseDistanceFieldMip(Ar));
+            var mips = Ar.Game switch
+            {
+                EGame.GAME_TheFinals or EGame.GAME_ArcRaiders => 2,
+                _ => DistanceField.NumMips
+            };
+            Mips = Ar.ReadArray(mips, () => new FSparseDistanceFieldMip(Ar));
             AlwaysLoadedMip = Ar.ReadArray<byte>();
+            if (Ar.Game is EGame.GAME_TheFinals or EGame.GAME_ArcRaiders)
+                Ar.Position += 6;
             StreamableMips = new FByteBulkData(Ar);
         }
     }

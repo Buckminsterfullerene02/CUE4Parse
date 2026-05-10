@@ -67,7 +67,7 @@ public class USceneComponent : UActorComponent
             current = current.Template?.Load<USceneComponent>();
         }
 
-        return new FTransform(FRotator.ZeroRotator, FVector.ZeroVector, FVector.OneVector);
+        return new FTransform(FRotator.ZeroRotator, FVector.ZeroVector, topMostScale ?? FVector.OneVector);
     }
 
     public FTransform GetAbsoluteTransform()
@@ -120,6 +120,13 @@ public class USceneComponent : UActorComponent
     public FVector GetRelativeLocation() => GetOrDefault("RelativeLocation", FVector.ZeroVector);
     public FRotator GetRelativeRotation() => GetOrDefault("RelativeRotation", FRotator.ZeroRotator);
     public FVector GetRelativeScale3D() => GetOrDefault("RelativeScale3D", FVector.OneVector);
+
+    public void AddLocalRotation(FRotator deltaRotation)
+    {
+        var curRelRotQuat = GetRelativeRotation().Quaternion();
+        var newRelRotQuat = curRelRotQuat * deltaRotation.Quaternion();
+        PropertyUtil.Set(this, "RelativeRotation", newRelRotQuat.Rotator());
+    }
 
     protected internal override void WriteJson(JsonWriter writer, JsonSerializer serializer)
     {

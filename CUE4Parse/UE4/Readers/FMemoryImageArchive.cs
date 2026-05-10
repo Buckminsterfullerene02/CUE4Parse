@@ -35,7 +35,6 @@ public struct FFrozenMemoryImagePtr
             OffsetFromThis = (long)_packed >> 1;
         }
     }
-
 }
 
 public class FMemoryImageArchive : FArchive
@@ -313,6 +312,17 @@ public class FMemoryImageArchive : FArchive
                 7 => EMaterialParameterType.StaticComponentMask,
                 _ => (EMaterialParameterType) value,
             }
+        };
+    }
+
+    public FMaterialUniformPreshaderHeader ReadMaterialUniformPreshaderHeader()
+    {
+        return Game switch
+        {
+            >= EGame.GAME_UE5_8 => new FMaterialUniformPreshaderHeader_5_8(this),
+            >= EGame.GAME_UE5_1 => new FMaterialUniformPreshaderHeader_5_1(this),
+            >= EGame.GAME_UE5_0 => new FMaterialUniformPreshaderHeader_5_0(this),
+            _ => new FMaterialUniformPreshaderHeader(this),
         };
     }
 }

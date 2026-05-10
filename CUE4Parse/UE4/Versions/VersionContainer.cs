@@ -29,7 +29,7 @@ namespace CUE4Parse.UE4.Versions
             get => _ver;
             set
             {
-                bExplicitVer = value.FileVersionUE4 != 0 || value.FileVersionUE5 != 0;
+                bExplicitVer = value.FileVersionUE3 != 0 || value.FileVersionUE4 != 0 || value.FileVersionUE5 != 0;
                 _ver = bExplicitVer ? value : _game.GetVersion();
             }
         }
@@ -77,7 +77,7 @@ namespace CUE4Parse.UE4.Versions
             Options["Vector_NetQuantize_AsStruct"] = Game >= GAME_UE5_0;
 
             // fields
-            Options["RawIndexBuffer.HasShouldExpandTo32Bit"] = Game >= GAME_UE4_25 && Game != GAME_DeltaForceHawkOps;
+            Options["RawIndexBuffer.HasShouldExpandTo32Bit"] = Game >= GAME_UE4_25 && Game != GAME_DeltaForce;
             Options["ShaderMap.UseNewCookedFormat"] = Game >= GAME_UE5_0;
             Options["SkeletalMesh.UseNewCookedFormat"] = Game >= GAME_UE4_24;
             Options["SkeletalMesh.HasRayTracingData"] = Game is >= GAME_UE4_27 or GAME_UE4_25_Plus;

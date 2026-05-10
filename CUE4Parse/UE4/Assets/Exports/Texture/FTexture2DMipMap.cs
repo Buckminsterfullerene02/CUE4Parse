@@ -11,12 +11,12 @@ namespace CUE4Parse.UE4.Assets.Exports.Texture;
 [JsonConverter(typeof(FTexture2DMipMapConverter))]
 public class FTexture2DMipMap
 {
-    public FByteBulkData? BulkData;
+    public TBulkData<byte>? BulkData;
     public int SizeX;
     public int SizeY;
     public int SizeZ;
 
-    public FTexture2DMipMap(FByteBulkData bulkData, int sizeX, int sizeY, int sizeZ)
+    public FTexture2DMipMap(TBulkData<byte> bulkData, int sizeX, int sizeY, int sizeZ)
     {
         BulkData = bulkData;
         SizeX = sizeX;
@@ -51,7 +51,9 @@ public class FTexture2DMipMap
 
         if (Ar.Ver >= EUnrealEngineObjectUE4Version.TEXTURE_DERIVED_DATA2 && !cooked)
         {
-            var derivedDataKey = Ar.ReadFString();
+            var FileRegionType = Ar.Game >= EGame.GAME_UE4_26 ? Ar.Read<byte>() : 0;
+            var derivedDataKey = Ar.Game < EGame.GAME_UE5_0 ? Ar.ReadFString() : "";
+            var bPagedToDerivedData = Ar.Game >= EGame.GAME_UE5_0 ? Ar.ReadBoolean() : false;
         }
     }
 
@@ -76,7 +78,7 @@ public class FTexture2DMipMap
                     return destination;
                 });
 
-                BulkData = new FByteBulkData(data);
+                BulkData = new FByteArrayData(data);
                 return true;
             }
             // default: throw new NotImplementedException("unknown mip data provider");

@@ -1,4 +1,3 @@
-using CUE4Parse.UE4.Assets.Exports.Component.Atmosphere;
 using CUE4Parse.UE4.Assets.Exports.Component.Landscape;
 using CUE4Parse.UE4.Assets.Exports.Component.Lights;
 using CUE4Parse.UE4.Assets.Exports.Component.SkeletalMesh;
@@ -6,7 +5,10 @@ using CUE4Parse.UE4.Assets.Exports.Component.StaticMesh;
 using CUE4Parse.UE4.Assets.Exports.Sound;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Assets.Readers;
+using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.Core.Misc;
+using CUE4Parse.UE4.Objects.Engine;
+using CUE4Parse.UE4.Objects.PhysicsEngine;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
 using Newtonsoft.Json;
@@ -46,19 +48,33 @@ public class UActorSequenceComponent : UActorComponent;
 public class UActorTextureStreamingBuildDataComponent : UActorComponent;
 public class UApplicationLifecycleComponent : UActorComponent;
 public class UArchVisCharMovementComponent : UCharacterMovementComponent;
-public class UArrowComponent : UPrimitiveComponent;
+
+public class UArrowComponent : UPrimitiveComponent
+{
+    public FColor ArrowColor;
+    public float ArrowSize;
+    public float ArrowLength;
+
+    public override void Deserialize(FAssetArchive Ar, long validPos)
+    {
+        base.Deserialize(Ar, validPos);
+
+        ArrowColor = GetOrDefault(nameof(ArrowColor), new FColor(255, 0, 0));
+        ArrowSize = GetOrDefault(nameof(ArrowSize), 1.0f);
+        ArrowLength = GetOrDefault(nameof(ArrowLength), 80.0f);
+    }
+}
 public class UAsyncPhysicsInputComponent : UActorComponent;
-public class UAtmosphericFogComponent : USkyAtmosphereComponent;
 public class UAudioCaptureComponent : USynthComponent;
 
 public class UAudioComponent : USceneComponent
 {
     public USoundBase? Sound { get; protected set; }
-    
+
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
         base.Deserialize(Ar, validPos);
-        
+
         Sound = GetOrDefault<USoundBase?>(nameof(Sound));
     }
 }
@@ -86,10 +102,10 @@ public class UBillboardComponent : UPrimitiveComponent
         {
             var sprite = current.GetOrDefault<UTexture2D?>("Sprite");
             if (sprite != null) return sprite;
-            
+
             current = current.Template?.Load<UBillboardComponent>();
         }
-        
+
         return Owner?.Provider?.LoadPackageObject<UTexture2D>("Engine/Content/EditorResources/S_Actor.S_Actor");
     }
 }
@@ -99,7 +115,22 @@ public class UBoxComponent : UShapeComponent;
 public class UBoxFalloff : UFieldNodeFloat;
 public class UBoxReflectionCaptureComponent : UReflectionCaptureComponent;
 public class UBrainComponent : UActorComponent;
-public class UBrushComponent : UPrimitiveComponent;
+public class UBrushComponent : UPrimitiveComponent
+{
+    public FPackageIndex? Brush { get; protected set; }
+    public FPackageIndex? BrushBodySetup { get; protected set; }
+
+    public override void Deserialize(FAssetArchive Ar, long validPos)
+    {
+        base.Deserialize(Ar, validPos);
+
+        Brush = GetOrDefault(nameof(Brush), new FPackageIndex());
+        BrushBodySetup = GetOrDefault(nameof(BrushBodySetup), new FPackageIndex());
+    }
+
+    public UModel? GetBrush() => Brush?.Load<UModel>();
+    public override UBodySetup? GetBodySetup() => BrushBodySetup?.Load<UBodySetup>();
+}
 public class UCableComponent : UMeshComponent;
 public class UCameraComponent : USceneComponent;
 public class UCameraShakeSourceComponent : USceneComponent;
@@ -247,7 +278,7 @@ public class UParticleSystemComponent : UFXSystemComponent
 {
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
-        if(Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 16;
+        if (Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 16;
         base.Deserialize(Ar, validPos);
     }
 }
@@ -295,7 +326,6 @@ public class URadialForceComponent : USceneComponent;
 public class URadialIntMask : UFieldNodeInt;
 public class URadialVector : UFieldNodeVector;
 public class URandomVector : UFieldNodeVector;
-public class UReflectionCaptureComponent : USceneComponent;
 public class UReturnResultsTerminal : UFieldNodeBase;
 public class URotatingMovementComponent : UMovementComponent;
 public class URuntimeVirtualTextureComponent : USceneComponent;
@@ -306,8 +336,6 @@ public class USensingComponent : UPawnSensingComponent;
 public class UShapeComponent : UPrimitiveComponent;
 public class USingleAnimSkeletalComponent : USkeletalMeshComponent;
 public class USkeletalMeshReplicatedComponent : USkeletalMeshComponent;
-public class USkinnedMeshComponent : UMeshComponent;
-public class USkyLightComponent : ULightComponentBase;
 public class USmartNavLinkComponent : UNavLinkCustomComponent;
 public class USparseVolumeTextureViewerComponent : UPrimitiveComponent;
 public class USpectatorPawnMovement : UFloatingPawnMovement;

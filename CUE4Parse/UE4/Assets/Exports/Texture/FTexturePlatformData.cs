@@ -30,7 +30,7 @@ public struct FSharedImage
         GammaSpace = Ar.Read<byte>();
         var RawData = Ar.ReadArray<byte>((int)Ar.Read<long>());
 
-        var bulkdata = new FByteBulkData(RawData);
+        var bulkdata = new FByteArrayData(RawData);
         Mip = new FTexture2DMipMap(bulkdata, SizeX, SizeY, this.SizeZ);
     }
 }
@@ -48,7 +48,7 @@ public class FTexturePlatformData
     public readonly string PixelFormat;
     public readonly FOptTexturePlatformData OptData;
     public readonly int FirstMipToSerialize;
-    public readonly FTexture2DMipMap[] Mips;
+    public FTexture2DMipMap[] Mips;
     public readonly FVirtualTextureBuiltData? VTData;
     public readonly FSharedImage? CPUCopy;
 
@@ -60,15 +60,22 @@ public class FTexturePlatformData
         PixelFormat = string.Empty;
         OptData = default;
         FirstMipToSerialize = -1;
-        Mips = Array.Empty<FTexture2DMipMap>();
+        Mips = [];
         VTData = null;
     }
 
     public FTexturePlatformData(FAssetArchive Ar, UTexture Owner, bool bSerializeMipData = true)
     {
-        if (Ar is { Game: >= EGame.GAME_UE5_0, IsFilterEditorOnly: true })
+        const long PlaceholderDerivedDataSize = 16;
+        if (Ar.Game is >= EGame.GAME_UE5_2)
         {
-            const long PlaceholderDerivedDataSize = 16;
+            if (Ar.ReadFlag() && Ar.Game != EGame.GAME_InfinityNikki) // bUsingDerivedData
+                throw new NotImplementedException("FTexturePlatformData deserialization using derived data is not implemented.");
+            else
+                Ar.Position += PlaceholderDerivedDataSize - 1;
+        }
+        else if (Ar is { Game: >= EGame.GAME_UE5_0, IsFilterEditorOnly: true })
+        {
             Ar.Position += PlaceholderDerivedDataSize;
         }
 
@@ -151,6 +158,8 @@ public class FTexturePlatformData
                 VTData = new FVirtualTextureBuiltData(Ar, FirstMipToSerialize - LODBias);
             }
         }
+
+        if (Ar.Game is EGame.GAME_AssaultFireFuture && Ar.ReadBoolean()) Ar.Position += 112; 
 
         if (Mips.Length > 0)
         {

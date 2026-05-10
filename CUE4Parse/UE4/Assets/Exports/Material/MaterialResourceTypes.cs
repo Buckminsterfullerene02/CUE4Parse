@@ -25,7 +25,7 @@ public class FMaterial
 
     public void DeserializeInlineShaderMap(FMaterialResourceProxyReader Ar)
     {
-        var bCooked = Ar.ReadBoolean();
+        var bCooked = Ar.Ver > EUnrealEngineObjectUE4Version.INLINE_SHADERS && Ar.ReadBoolean();
         if (!bCooked) return;
 
         var bValid = Ar.ReadBoolean();
@@ -139,12 +139,13 @@ public class FShaderMapContent
             var shaderPlatform = Ar.ReadFName();
             Enum.TryParse("SP_" + shaderPlatform.PlainText, out ShaderPlatform);
 
-            if (Ar.Game == EGame.GAME_MarvelRivals) Ar.Position += 8;
+            if (Ar.Game is EGame.GAME_MarvelRivals or EGame.GAME_Valorant or EGame.GAME_DeadByDaylight) Ar.Position += 8;
         }
         else
         {
             ShaderPlatform = Ar.Read<EShaderPlatform>();
             Ar.Position = Ar.Position.Align(8);
+            if (Ar.Game is EGame.GAME_HonorofKingsWorld) Ar.Position += 152;
         }
     }
 }
@@ -235,6 +236,7 @@ public class FShaderParameterBindings
         BindlessResourceParameters = Ar.Game >= EGame.GAME_UE5_1 ? Ar.ReadArray<FBindlessResourceParameter>() : Array.Empty<FBindlessResourceParameter>();
         GraphUniformBuffers = Ar.Game >= EGame.GAME_UE4_26 ? Ar.ReadArray<FParameterStructReference>() : Array.Empty<FParameterStructReference>();
         ParameterReferences = Ar.ReadArray<FParameterStructReference>();
+        if (Ar.Game is EGame.GAME_ArenaBreakoutInfinite) Ar.Position += 16;
 
         StructureLayoutHash = Ar.Read<uint>();
         RootParameterBufferIndex = Ar.Read<ushort>();
@@ -303,6 +305,7 @@ public class FShaderParameterMapInfo
         {
             UniformBuffers = Ar.ReadArray(() => new FShaderUniformBufferParameterInfo(Ar));
             TextureSamplers = Ar.ReadArray(() => new FShaderResourceParameterInfo(Ar));
+            if (Ar.Game is EGame.GAME_DuneAwakening) Ar.Position += 16;
             SRVs = Ar.ReadArray(() => new FShaderResourceParameterInfo(Ar));
         }
         else //4.25-5.0
@@ -311,8 +314,10 @@ public class FShaderParameterMapInfo
             TextureSamplers = Ar.ReadArray(() => new FShaderParameterInfo(Ar));
             SRVs = Ar.ReadArray(() => new FShaderParameterInfo(Ar));
         }
+        if (Ar.Game is EGame.GAME_ArenaBreakoutInfinite or EGame.GAME_HonorofKingsWorld) Ar.Position += 16;
         LooseParameterBuffers = Ar.ReadArray(() => new FShaderLooseParameterBufferInfo(Ar));
         Hash = Ar.Game >= EGame.GAME_UE4_26 ? Ar.Read<ulong>() : 0;
+        if (Ar.Game is EGame.GAME_ArenaBreakoutInfinite) Ar.Position += 8;
     }
 }
 
@@ -547,7 +552,7 @@ public class FMaterialCompilationOutput
         RuntimeVirtualTextureOutputAttributeMask = Ar.Read<byte>();
         b1 = Ar.Read<byte>();
         b2 = Ar.Read<byte>();
-        b3 = Ar.Game == EGame.GAME_UE5_2 ? Ar.Read<byte>() : (byte)0;
+        b3 = Ar.Game is (>= EGame.GAME_UE5_2 and < EGame.GAME_UE5_3) or >= EGame.GAME_UE5_8 ? Ar.Read<byte>() : (byte)0;
         Ar.Position = Ar.Position.Align(8);
     }
 }
@@ -573,6 +578,7 @@ public class FUniformExpressionSet
     public FMaterialCacheTagStack[]? MaterialCacheTagStacks;
     public FGuid[] ParameterCollections;
     public FRHIUniformBufferLayoutInitializer UniformBufferLayoutInitializer;
+    public FCompactUniformExpressionSet[]? CompactUniformsVSOptional;
 
     public FUniformExpressionSet(FMemoryImageArchive Ar)
     {
@@ -587,20 +593,17 @@ public class FUniformExpressionSet
         UniformTextureParameters = new FMaterialTextureParameterInfo[materialTextureParameterTypeCount][];
         if (Ar.Game >= EGame.GAME_UE5_0)
         {
-            if (Ar.Game >= EGame.GAME_UE5_6)
-            {
-                UniformParameterEvaluations = Ar.ReadArray<FMaterialUniformParameterEvaluation>();
-            }
+            if (Ar.Game >= EGame.GAME_UE5_6) UniformParameterEvaluations = Ar.ReadArray<FMaterialUniformParameterEvaluation>();
 
-            UniformPreshaders = Ar.ReadArray(() => new FMaterialUniformPreshaderHeader(Ar));
-            UniformPreshaderFields = Ar.Game >= EGame.GAME_UE5_1 ? Ar.ReadArray<FMaterialUniformPreshaderField>() : [];
+            if (Ar.Game is EGame.GAME_Aion2) _ = Ar.ReadArray(() => new FMaterialNumericParameterInfo(Ar)); // additional parameters
+            UniformPreshaders = Ar.ReadArray(Ar.ReadMaterialUniformPreshaderHeader);
+            UniformPreshaderFields = Ar.Game is >= EGame.GAME_UE5_1 and < EGame.GAME_UE5_8 ? Ar.ReadArray<FMaterialUniformPreshaderField>() : [];
             UniformNumericParameters = Ar.ReadArray(() => new FMaterialNumericParameterInfo(Ar));
+            if (Ar.Game is EGame.GAME_FateTrigger) Ar.Position += 16;
             Ar.ReadArray(UniformTextureParameters, () => Ar.ReadArray(() => new FMaterialTextureParameterInfo(Ar)));
             UniformExternalTextureParameters = Ar.ReadArray(() => new FMaterialExternalTextureParameterInfo(Ar));
-            if (Ar.Game >= EGame.GAME_UE5_5)
-            {
-                UniformTextureCollectionParameters = Ar.ReadArray(() => new FMaterialTextureCollectionParameterInfo(Ar));
-            }
+            if (Ar.Game >= EGame.GAME_UE5_5 && Ar.Game is not EGame.GAME_FateTrigger) UniformTextureCollectionParameters = Ar.ReadArray(() => new FMaterialTextureCollectionParameterInfo(Ar));
+
             UniformPreshaderBufferSize = Ar.Read<uint>();
             Ar.Position = Ar.Position.Align(8);
             UniformPreshaderData = new FMaterialPreshaderData(Ar);
@@ -621,23 +624,43 @@ public class FUniformExpressionSet
         }
         else
         {
-            UniformVectorPreshaders = Ar.ReadArray(() => new FMaterialUniformPreshaderHeader(Ar));
-            UniformScalarPreshaders = Ar.ReadArray(() => new FMaterialUniformPreshaderHeader(Ar));
+            UniformVectorPreshaders = Ar.ReadArray(Ar.ReadMaterialUniformPreshaderHeader);
+            UniformScalarPreshaders = Ar.ReadArray(Ar.ReadMaterialUniformPreshaderHeader);
             UniformScalarParameters = Ar.ReadArray(() => new FMaterialScalarParameterInfo(Ar));
             UniformVectorParameters = Ar.ReadArray(() => new FMaterialVectorParameterInfo(Ar));
-            UniformTextureParameters = new FMaterialTextureParameterInfo[5][];
             Ar.ReadArray(UniformTextureParameters, () => Ar.ReadArray(() => new FMaterialTextureParameterInfo(Ar)));
             UniformExternalTextureParameters = Ar.ReadArray(() => new FMaterialExternalTextureParameterInfo(Ar));
             UniformPreshaderData = new FMaterialPreshaderData(Ar);
         }
 
         VTStacks = Ar.ReadArray(() => new FMaterialVirtualTextureStack(Ar));
-        if (Ar.Game >= EGame.GAME_UE5_7)
-        {
-            MaterialCacheTagStacks = Ar.ReadArray<FMaterialCacheTagStack>();
-        }
+        if (Ar.Game >= EGame.GAME_UE5_7 || Ar.Game is EGame.GAME_FateTrigger) MaterialCacheTagStacks = Ar.ReadArray<FMaterialCacheTagStack>();
         ParameterCollections = Ar.ReadArray<FGuid>();
+        if (Ar.Game is EGame.GAME_HogwartsLegacy) Ar.Position += 168;
         UniformBufferLayoutInitializer = new FRHIUniformBufferLayoutInitializer(Ar);
+        if (Ar.Game >= EGame.GAME_UE5_8) CompactUniformsVSOptional = Ar.ReadArray(() => new FCompactUniformExpressionSet(Ar));
+    }
+}
+
+[StructLayout(LayoutKind.Sequential, Size = 6, Pack = 2)]
+public struct FCompactionMetaDataSegment
+{
+    public ushort SrcOffset;
+    public ushort DestOffset;
+    public ushort SizeToCopy;
+}
+
+public class FCompactUniformExpressionSet
+{
+    public FRHIUniformBufferLayoutInitializer UniformBufferLayoutInitializer;
+    public FCompactionMetaDataSegment[] CompactionSegments;
+    public uint UniformPreshaderBufferSize;
+
+    public FCompactUniformExpressionSet(FMemoryImageArchive Ar)
+    {
+        UniformBufferLayoutInitializer = new FRHIUniformBufferLayoutInitializer(Ar);
+        CompactionSegments = Ar.ReadArray<FCompactionMetaDataSegment>();
+        UniformPreshaderBufferSize = Ar.Read<uint>();
     }
 }
 
@@ -763,35 +786,58 @@ public class FMaterialTextureParameterInfo : FMaterialBaseParameterInfo
 
 public class FMaterialUniformPreshaderHeader
 {
-    public readonly uint OpcodeOffset;
-    public readonly uint OpcodeSize;
-    public readonly uint? BufferOffset;
-    [JsonConverter(typeof(StringEnumConverter))]
-    public readonly EValueComponentType? ComponentType;
-    public readonly byte? NumComponents;
-    public readonly uint? FieldIndex;
-    public readonly uint? NumFields;
+    public uint OpcodeOffset;
+    public uint OpcodeSize;
+    public FMaterialUniformPreshaderHeader() { }
 
     public FMaterialUniformPreshaderHeader(FMemoryImageArchive Ar)
     {
         OpcodeOffset = Ar.Read<uint>();
         OpcodeSize = Ar.Read<uint>();
-
-        if (Ar.Game == EGame.GAME_UE5_0)
-        {
-            BufferOffset = Ar.Read<uint>();
-            ComponentType = Ar.Read<EValueComponentType>();
-            NumComponents = Ar.Read<byte>();
-            Ar.Position = Ar.Position.Align(4);
-        }
-        else if (Ar.Game >= EGame.GAME_UE5_1)
-        {
-            FieldIndex = Ar.Read<uint>();
-            NumFields = Ar.Read<uint>();
-        }
     }
 }
 
+public class FMaterialUniformPreshaderHeader_5_0 : FMaterialUniformPreshaderHeader
+{
+    public readonly uint BufferOffset;
+    [JsonConverter(typeof(StringEnumConverter))]
+    public readonly EValueComponentType ComponentType;
+    public readonly byte? NumComponents;
+
+    public FMaterialUniformPreshaderHeader_5_0(FMemoryImageArchive Ar) : base(Ar)
+    {
+        BufferOffset = Ar.Read<uint>();
+        ComponentType = Ar.Read<EValueComponentType>();
+        NumComponents = Ar.Read<byte>();
+        Ar.Position = Ar.Position.Align(4);
+    }
+}
+
+public class FMaterialUniformPreshaderHeader_5_1 : FMaterialUniformPreshaderHeader
+{
+    public readonly uint FieldIndex;
+    public readonly uint NumFields;
+
+    public FMaterialUniformPreshaderHeader_5_1(FMemoryImageArchive Ar) : base(Ar)
+    {
+        FieldIndex = Ar.Read<uint>();
+        NumFields = Ar.Read<uint>();
+    }
+}
+
+public class FMaterialUniformPreshaderHeader_5_8 : FMaterialUniformPreshaderHeader
+{
+    [JsonConverter(typeof(StringEnumConverter))] public EShaderValueType Type;
+    public readonly ushort BufferOffset;
+
+    public FMaterialUniformPreshaderHeader_5_8(FMemoryImageArchive Ar)
+    {
+        Type = (EShaderValueType) Ar.Read<ushort>();
+        BufferOffset = Ar.Read<ushort>();
+        OpcodeOffset = Ar.Read<uint>();
+        OpcodeSize = Ar.Read<uint>();
+    }
+}
 
 [StructLayout(LayoutKind.Sequential, Size = 12)]
 public struct FMaterialUniformPreshaderField
@@ -907,23 +953,40 @@ public class FMaterialPreshaderData
     public FPreshaderStructType[]? StructTypes;
     public EValueComponentType[]? StructComponentTypes;
     public byte[] Data;
+    public bool bPreshader2;
+    public bool bPreFixup;
+    public ushort Preshader2TemporarySize;
 
     public FMaterialPreshaderData(FMemoryImageArchive Ar)
     {
+        if (Ar.Game is EGame.GAME_DuneAwakening) Ar.Position += 56; // Custom Layers Data
+
+        if (Ar.Game >= EGame.GAME_UE5_8)
+        {
+            bPreshader2 = Ar.ReadFlag();
+            bPreFixup = Ar.ReadFlag();
+            Preshader2TemporarySize = Ar.Read<ushort>();
+            Ar.Position = Ar.Position.Align(8);
+        }
+
         if (Ar.Game >= EGame.GAME_UE4_26)
         {
             Names = Ar.ReadArray(Ar.ReadFName);
         }
 
-        if (Ar.Game == EGame.GAME_UE5_0)
-        {
-            NamesOffset = Ar.ReadArray<uint>();
-        }
+        if (Ar.Game >= EGame.GAME_UE5_8)
+        { }
         else if (Ar.Game >= EGame.GAME_UE5_1)
         {
             StructTypes = Ar.ReadArray<FPreshaderStructType>();
             StructComponentTypes = Ar.ReadArray<EValueComponentType>();
         }
+        else if (Ar.Game >= EGame.GAME_UE5_0)
+        {
+            NamesOffset = Ar.ReadArray<uint>();
+        }
+
+        if (Ar.Game is EGame.GAME_HogwartsLegacy) Ar.Position += 96;
 
         Data = Ar.ReadArray<byte>();
     }
@@ -977,10 +1040,8 @@ public class FRHIUniformBufferLayoutInitializer
     public uint ConstantBufferSize = 0;
     public ushort RenderTargetsOffset = ushort.MaxValue;
     public byte /*FUniformBufferStaticSlot*/ StaticSlot = 255;
-    [JsonConverter(typeof(StringEnumConverter))] public EUniformBufferBindingFlags BindingFlags = EUniformBufferBindingFlags.Shader;
-    public bool bHasNonGraphOutputs = false;
-    public bool bNoEmulatedUniformBuffer = false;
-    public bool bUniformView = false;
+    public EUniformBufferBindingFlags BindingFlags = EUniformBufferBindingFlags.Shader;
+    public ERHIUniformBufferFlags Flags = ERHIUniformBufferFlags.None;
 
     public FRHIUniformBufferLayoutInitializer(FMemoryImageArchive Ar)
     {
@@ -995,12 +1056,21 @@ public class FRHIUniformBufferLayoutInitializer
             UniformBuffers = Ar.ReadArray<FRHIUniformBufferResource>();
             Hash = Ar.Read<uint>();
             ConstantBufferSize = Ar.Read<uint>();
+            if (Ar.Game is EGame.GAME_FateTrigger) Ar.Position += 4;
             RenderTargetsOffset = Ar.Read<ushort>();
             StaticSlot = Ar.Read<byte>();
             BindingFlags = Ar.Read<EUniformBufferBindingFlags>();
-            bHasNonGraphOutputs = Ar.ReadFlag();
-            bNoEmulatedUniformBuffer = Ar.ReadFlag();
-            bUniformView = Ar.Game >= EGame.GAME_UE5_4 && Ar.ReadFlag();
+            if (Ar.Game >= EGame.GAME_UE5_5)
+            {
+                Flags = Ar.Read<ERHIUniformBufferFlags>();
+            }
+            else
+            {
+                if (Ar.ReadFlag()) Flags |= ERHIUniformBufferFlags.HasNonGraphOutputs;
+                if (Ar.ReadFlag()) Flags |= ERHIUniformBufferFlags.NoEmulatedUniformBuffer;
+                if (Ar.Game >= EGame.GAME_UE5_4 && Ar.ReadFlag()) Flags |= ERHIUniformBufferFlags.UniformView;
+            }
+
             Ar.Position = Ar.Position.Align(4);
         }
         else if (Ar.Game >= EGame.GAME_UE4_26)
@@ -1009,7 +1079,7 @@ public class FRHIUniformBufferLayoutInitializer
             StaticSlot = Ar.Read<byte>();
             Ar.Position += 1;
             RenderTargetsOffset = Ar.Read<ushort>();
-            bHasNonGraphOutputs = Ar.ReadFlag();
+            if (Ar.ReadFlag()) Flags |= ERHIUniformBufferFlags.HasNonGraphOutputs;
             Ar.Position = Ar.Position.Align(8);
             Resources = Ar.ReadArray<FRHIUniformBufferResource>();
             GraphResources = Ar.ReadArray<FRHIUniformBufferResource>();
@@ -1035,8 +1105,28 @@ public class FRHIUniformBufferLayoutInitializer
             Hash = Ar.Read<uint>();
             Ar.Position = Ar.Position.Align(8);
         }
+        if (Flags is not ERHIUniformBufferFlags.None) Flags &= ~ERHIUniformBufferFlags.None;
     }
 }
+
+[Flags]
+[JsonConverter(typeof(StringEnumConverter))]
+public enum ERHIUniformBufferFlags : byte
+{
+    None                    = 0,
+
+    /** Whether to force a real uniform buffer when using emulated uniform buffers */
+    NoEmulatedUniformBuffer = 1 << 0,
+
+    /** Signals if the uniform buffer members need to be included in shader reflection */
+    NeedsReflectedMembers   = 1 << 1,
+
+    /** Whether this layout may contain non-render-graph outputs (e.g. RHI UAVs). */
+    HasNonGraphOutputs      = 1 << 2,
+
+    /** This struct is a view into uniform buffer object, on platforms that support UBO */
+    UniformView             = 1 << 3,
+};
 
 [StructLayout(LayoutKind.Sequential, Size = 4)]
 public struct FRHIUniformBufferResource
@@ -1050,8 +1140,8 @@ public class FShaderMapResourceCode(FArchive Ar)
 {
     public FSHAHash ResourceHash = new FSHAHash(Ar);
     public FSHAHash[] ShaderHashes = Ar.ReadArray(() => new FSHAHash(Ar));
-    public FShaderEntry[] ShaderEntries = Ar.Game < EGame.GAME_UE5_6 ? Ar.ReadArray(() => new FShaderEntry(Ar)) : [];
-    public FShaderCodeResource[] ShaderCodeResources = Ar.Game >= EGame.GAME_UE5_6 ? Ar.ReadArray(() => new FShaderCodeResource(Ar)) : [];
+    public FShaderEntry[] ShaderEntries = Ar.Game < EGame.GAME_UE5_5 ? Ar.ReadArray(() => new FShaderEntry(Ar)) : [];
+    public FShaderCodeResource[] ShaderCodeResources = Ar.Game >= EGame.GAME_UE5_5 ? Ar.ReadArray(() => new FShaderCodeResource(Ar)) : [];
 }
 
 public class FShaderEntry(FArchive Ar)
@@ -1078,7 +1168,7 @@ public class FShaderCodeResource
 
     FHeader Header;		// The above FHeader struct persisted in a shared buffer
     FSharedBuffer Code;			// The bytecode buffer as constructed by FShaderCode::FinalizeShaderCode
-    FCompressedBuffer Symbols;	// Buffer containing the symbols for this bytecode; will be empty if symbols are disabled
+    FCompressedBuffer? Symbols;	// Buffer containing the symbols for this bytecode; will be empty if symbols are disabled
 
     public FShaderCodeResource(FArchive Ar)
     {
@@ -1086,7 +1176,7 @@ public class FShaderCodeResource
         using var headerAr = new FByteArchive("FShaderCodeResource::Header", headerBuffer.Data, Ar.Versions);
         Header = headerAr.Read<FHeader>();
         Code = new FSharedBuffer(Ar);
-        Symbols = new FCompressedBuffer(Ar);
+        if (Ar.Game >= EGame.GAME_UE5_6) Symbols = new FCompressedBuffer(Ar);
     }
 }
 
@@ -1281,6 +1371,12 @@ public class FMaterialShaderMapId
         {
             QualityLevel = Ar.Game >= EGame.GAME_UE5_2 ? (EMaterialQualityLevel) Ar.Read<byte>() : (EMaterialQualityLevel) Ar.Read<int>();//changed to byte in FN 23.20
             FeatureLevel = (ERHIFeatureLevel) Ar.Read<int>();
+            if (Ar.Game is EGame.GAME_ArenaBreakoutInfinite) Ar.Position += 4;
+            if (Ar.Game is EGame.GAME_RocoKingdomWorld)
+            {
+                (QualityLevel, FeatureLevel) = ((EMaterialQualityLevel) FeatureLevel, (ERHIFeatureLevel) QualityLevel);
+                Ar.Position += 16;
+            }
         }
         else
         {
@@ -1326,6 +1422,7 @@ public class FPlatformTypeLayoutParameters
 }
 
 [Flags]
+[JsonConverter(typeof(StringEnumConverter))]
 public enum EUniformBufferBindingFlags : byte
 {
     Shader = 1 << 0,

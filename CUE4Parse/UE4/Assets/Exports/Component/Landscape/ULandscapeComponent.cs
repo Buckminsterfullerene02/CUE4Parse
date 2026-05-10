@@ -9,7 +9,7 @@ using CUE4Parse.UE4.Versions;
 
 namespace CUE4Parse.UE4.Assets.Exports.Component.Landscape;
 
-public class ULandscapeComponent: UPrimitiveComponent
+public class ULandscapeComponent : UPrimitiveComponent
 {
     public int SectionBaseX;
     public int SectionBaseY;
@@ -65,10 +65,18 @@ public class ULandscapeComponent: UPrimitiveComponent
         }
 
         if (Ar.Game is EGame.GAME_Farlight84) Ar.Position += 32;
-        
+
         if (Ar.Ver >= EUnrealEngineObjectUE4Version.LANDSCAPE_PLATFORMDATA_COOKING && !Flags.HasFlag(EObjectFlags.RF_ClassDefaultObject))
         {
             bCooked = Ar.ReadBoolean();
+        }
+
+        if (Ar.Game is EGame.GAME_Aion2)
+        {
+            var bCookedMobileData = Ar.ReadBoolean();
+            var some = Ar.ReadBulkArray<FVector>();
+            var idk = Ar.ReadBulkArray<ushort>();
+            return;
         }
 
         if (Ar.Game < EGame.GAME_UE5_1 && Ar.Position + 4 <= validPos)

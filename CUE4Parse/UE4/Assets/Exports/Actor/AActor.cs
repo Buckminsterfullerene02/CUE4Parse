@@ -1,6 +1,8 @@
 using CUE4Parse.UE4.Assets.Exports.NavigationSystem;
 using CUE4Parse.UE4.Assets.Readers;
+using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
+using Newtonsoft.Json;
 
 namespace CUE4Parse.UE4.Assets.Exports.Actor;
 
@@ -28,6 +30,23 @@ public class AActor : UObject
         if (FFortniteMainBranchObjectVersion.Get(Ar) >= FFortniteMainBranchObjectVersion.Type.LevelInstanceStaticLightingSupport && Ar.IsLoadingFromCookedPackage)
         {
             ActorInstanceGuid = new FActorInstanceGuid(Ar);
+        }
+    }
+
+    protected internal override void WriteJson(JsonWriter writer, JsonSerializer serializer)
+    {
+        base.WriteJson(writer, serializer);
+
+        if (!string.IsNullOrEmpty(ActorLabel))
+        {
+            writer.WritePropertyName("ActorLabel");
+            writer.WriteValue(ActorLabel);
+        }
+
+        if (ActorInstanceGuid is not null)
+        {
+            writer.WritePropertyName("ActorInstanceGuid");
+            serializer.Serialize(writer, ActorInstanceGuid);
         }
     }
 }
@@ -381,7 +400,19 @@ public class AVolume : ABrush;
 public class AVolumetricCloud : AInfo;
 public class AVolumetricLightmapDensityVolume : AVolume;
 public class AWindDirectionalSource : AInfo;
-public class AWorldDataLayers : AInfo;
+
+public class AWorldDataLayers : AInfo
+{
+    public FPackageIndex[] DataLayerInstances;
+
+    public override void Deserialize(FAssetArchive Ar, long validPos)
+    {
+        base.Deserialize(Ar, validPos);
+
+        DataLayerInstances = GetOrDefault<FPackageIndex[]>(nameof(DataLayerInstances), []);
+    }
+}
+
 public class AWorldInfo : AWorldSettings;
 public class AWorldPartitionHLOD : AActor;
 public class AWorldPartitionMiniMap : AInfo;
@@ -390,9 +421,13 @@ public class AWorldPartitionReplay : AActor;
 public class AWorldPartitionVolume : AVolume;
 public class AWorldSettings : AInfo
 {
+    public FPackageIndex WorldPartition;
+
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
         if (Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 20;
         base.Deserialize(Ar, validPos);
+
+        WorldPartition = GetOrDefault(nameof(WorldPartition), new FPackageIndex());
     }
 }

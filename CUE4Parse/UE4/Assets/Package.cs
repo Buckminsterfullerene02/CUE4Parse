@@ -5,6 +5,7 @@ using System.IO;
 using CUE4Parse.FileProvider;
 using CUE4Parse.GameTypes.ACE7.Encryption;
 using CUE4Parse.UE4.Assets.Exports;
+using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Assets.Utils;
 using CUE4Parse.UE4.IO.Objects;
@@ -39,8 +40,8 @@ namespace CUE4Parse.UE4.Assets
             : this(
                 uasset,
                 uexp,
-                ubulk != null ? new Lazy<FArchive?>(() => ubulk) : null,
-                uptnl != null ? new Lazy<FArchive?>(() => uptnl) : null,
+                ubulk != null ? _ => ubulk : null,
+                uptnl != null ? _ => uptnl : null,
                 provider,
                 useLazySerialization)
         { }
@@ -58,8 +59,8 @@ namespace CUE4Parse.UE4.Assets
         public Package(
             FArchive uasset,
             FArchive? uexp,
-            Lazy<FArchive?>? ubulk = null,
-            Lazy<FArchive?>? uptnl = null,
+            Func<FByteBulkDataHeader?, FArchive?>? ubulk = null,
+            Func<FByteBulkDataHeader?, FArchive?>? uptnl = null,
             IFileProvider? provider = null,
             bool useLazySerialization = true)
             : base(uasset.Name.SubstringBeforeLast('.'), provider)
@@ -195,9 +196,10 @@ namespace CUE4Parse.UE4.Assets
                     ExportsLazy[i] = new Lazy<UObject>(() =>
                     {
                         // Create
-                        var obj = ConstructObject(ResolvePackageIndex(export.ClassIndex)?.Object?.Value as UStruct, this, (EObjectFlags) export.ObjectFlags);
+                        var obj = ConstructObject(ResolvePackageIndex(export.ClassIndex), this, (EObjectFlags) export.ObjectFlags);
                         obj.Name = export.ObjectName.Text;
-                        obj.Outer = (ResolvePackageIndex(export.OuterIndex) as ResolvedExportObject)?.Object.Value ?? this;
+                        obj.Outer = ResolvePackageIndex(export.OuterIndex) as ResolvedExportObject;
+                        obj.Outer ??= new ResolvedPackageObject(this);
                         obj.Super = ResolvePackageIndex(export.SuperIndex) as ResolvedExportObject;
                         obj.Template = ResolvePackageIndex(export.TemplateIndex) as ResolvedExportObject;
                         obj.Flags |= (EObjectFlags) export.ObjectFlags; // We give loaded objects the RF_WasLoaded flag in ConstructObject, so don't remove it again in here
@@ -344,7 +346,7 @@ namespace CUE4Parse.UE4.Assets
             }
 
             public override FName Name => _export?.ObjectName ?? "None";
-            public override ResolvedObject Outer => Package.ResolvePackageIndex(_export.OuterIndex) ?? new ResolvedLoadedObject((UObject) Package);
+            public override ResolvedObject Outer => Package.ResolvePackageIndex(_export.OuterIndex) ?? new ResolvedPackageObject(Package);
             public override ResolvedObject? Class => Package.ResolvePackageIndex(_export.ClassIndex);
             public override ResolvedObject? Super => Package.ResolvePackageIndex(_export.SuperIndex);
         }
@@ -478,17 +480,10 @@ namespace CUE4Parse.UE4.Assets
             {
                 Trace.Assert(_phase == LoadPhase.Create);
                 _phase = LoadPhase.Serialize;
-                _object = _package.ConstructObject(_package.ResolvePackageIndex(_export.ClassIndex)?.Object?.Value as UStruct, _package, (EObjectFlags) _export.ObjectFlags);
+                _object = _package.ConstructObject(_package.ResolvePackageIndex(_export.ClassIndex), _package, (EObjectFlags) _export.ObjectFlags);
                 _object.Name = _export.ObjectName.Text;
-                if (!_export.OuterIndex.IsNull)
-                {
-                    Trace.Assert(_export.OuterIndex.IsExport, "Outer imports are not yet supported");
-                    _object.Outer = _package._exportLoaders[_export.OuterIndex.Index - 1]._object;
-                }
-                else
-                {
-                    _object.Outer = _package;
-                }
+                _object.Outer = _package.ResolvePackageIndex(_export.OuterIndex) as ResolvedExportObject;
+                _object.Outer ??= new ResolvedPackageObject(_package);
                 _object.Super = _package.ResolvePackageIndex(_export.SuperIndex) as ResolvedExportObject;
                 _object.Template = _package.ResolvePackageIndex(_export.TemplateIndex) as ResolvedExportObject;
                 _object.Flags |= (EObjectFlags) _export.ObjectFlags; // We give loaded objects the RF_WasLoaded flag in ConstructObject, so don't remove it again in here

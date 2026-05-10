@@ -43,10 +43,13 @@ public abstract class FPropertyTagType
     public object? GetValue(Type type)
     {
         var generic = GenericValue;
+
+        type = Nullable.GetUnderlyingType(type) ?? type;
         if (type.IsInstanceOfType(generic))
         {
             return generic;
         }
+
         switch (this)
         {
             case FPropertyTagType<FScriptStruct> structProp when type.IsInstanceOfType(structProp.Value!.StructType):
@@ -70,6 +73,10 @@ public abstract class FPropertyTagType
             case FPropertyTagType<FSoftObjectPath> softObjProp when typeof(UObject).IsAssignableFrom(type):
                 if (softObjProp.Value.TryLoad(out var softExport) && type.IsInstanceOfType(softExport))
                     return softExport;
+                return null;
+            case FPropertyTagType<FSoftObjectPath> softObjProp when typeof(ResolvedObject).IsAssignableFrom(type):
+                if (softObjProp.Value!.TryLoad(out var loadedObject))
+                    return new ResolvedLoadedObject(loadedObject);
                 return null;
             case EnumProperty enumProp when type.IsEnum:
                 var storedEnum = enumProp.Value.Text;
@@ -163,6 +170,7 @@ public abstract class FPropertyTagType
             "VerseStringProperty" => new VerseStringProperty(Ar, type),
             "VerseFunctionProperty" => new ObjectProperty(Ar, type),
             "VerseDynamicProperty" => new ObjectProperty(Ar, type), // idk, but for now read as ObjectProperty
+            "VerseClassProperty" => new VerseClassProperty(Ar, type),
 
             "CustomProperty_FD" or "GbxDefPtrProperty" when Ar.Game == EGame.GAME_Borderlands4 => new GbxDefPtrProperty(Ar, type),
             "CustomProperty_FE" or "GameDataHandleProperty" when Ar.Game == EGame.GAME_Borderlands4 => new GameDataHandleProperty(Ar, type),
