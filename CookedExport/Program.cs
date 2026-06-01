@@ -11,8 +11,11 @@ using CUE4Parse.FileProvider.Objects;
 using CUE4Parse.MappingsProvider;
 using CUE4Parse.UE4.AssetRegistry;
 using CUE4Parse.UE4.AssetRegistry.Objects;
+using CUE4Parse.UE4.Assets;
+using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Objects.Core.Misc;
+using CUE4Parse.UE4.Readers;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse_Conversion.Textures;
 
@@ -31,7 +34,15 @@ public class Program
     private static int _maxDegreeOfParallelism = -1;
     private static bool _listAssetTypes = false;
     private static bool _extractTextures = false;
+    private static bool _dumpBlueprints = false;
+    private static string _blueprintDumpOutput = "BlueprintDump.txt";
+    private static string _assetRegistryPath = null;
     private static ETexturePlatform _texturePlatform = ETexturePlatform.DesktopMobile;
+    private static bool _moveBlueprints = false;
+    private static string _moveBlueprintsSource = null;
+    private static string _moveBlueprintsCooked = null;
+    private static bool _dryRun = false;
+    private static string _assetTypesFile = null;
     
     private const string AssetTypesList = "DiscoveredAssetTypes.txt";
     
@@ -81,8 +92,32 @@ public class Program
                 return;
             }
 
+            // If in dump blueprints mode, dump blueprint/widget info and exit
+            if (_dumpBlueprints)
+            {
+                Console.WriteLine("Dumping blueprint asset info...\n");
+                await DumpBlueprints();
+                Console.WriteLine("\nPress any key to exit...");
+                Console.ReadKey();
+                return;
+            }
+
+            // If in move-blueprints mode, move matching assets from project dir to cooked dir
+            if (_moveBlueprints)
+            {
+                // Load asset types filter from file (optional for -mb; if not found, all uassets are moved)
+                var mbAssetTypesFile = ResolveAssetTypesFilePath();
+                LoadAssetTypesFromFile(mbAssetTypesFile);
+
+                Console.WriteLine("Moving blueprint assets from project to cooked directory...\n");
+                MoveAssets();
+                Console.WriteLine("\nPress any key to exit...");
+                Console.ReadKey();
+                return;
+            }
+
             // Load asset types from file for export mode
-            var assetTypesFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AssetTypes.txt");
+            var assetTypesFile = ResolveAssetTypesFilePath();
             if (!LoadAssetTypesFromFile(assetTypesFile))
             {
                 Console.WriteLine($"Error: Could not load asset types from {assetTypesFile}");
@@ -212,6 +247,51 @@ public class Program
                     _extractTextures = true;
                     break;
                 
+                case "--dump-blueprints":
+                case "-b":
+                    _dumpBlueprints = true;
+                    break;
+                
+                case "--blueprint-output":
+                case "-bo":
+                    if (i + 1 < args.Length)
+                        _blueprintDumpOutput = args[++i];
+                    break;
+                
+                case "--asset-registry":
+                case "-ar":
+                    if (i + 1 < args.Length)
+                        _assetRegistryPath = args[++i];
+                    break;
+                
+                case "--move-blueprints":
+                case "-mb":
+                    _moveBlueprints = true;
+                    break;
+                
+                case "--dry-run":
+                case "-dr":
+                    _dryRun = true;
+                    break;
+                
+                case "--source":
+                case "-s":
+                    if (i + 1 < args.Length)
+                        _moveBlueprintsSource = args[++i];
+                    break;
+                
+                case "--cooked":
+                case "-c":
+                    if (i + 1 < args.Length)
+                        _moveBlueprintsCooked = args[++i];
+                    break;
+                
+                case "--asset-types":
+                case "-at":
+                    if (i + 1 < args.Length)
+                        _assetTypesFile = args[++i];
+                    break;
+                
                 case "--help":
                 case "-h":
                 case "/?":
@@ -224,20 +304,35 @@ public class Program
         }
 
         // Validate required arguments
-        if (string.IsNullOrEmpty(_pakDir))
+        if (string.IsNullOrEmpty(_pakDir) && !_moveBlueprints)
         {
             Console.WriteLine("Error: --pakdir is required");
             return false;
         }
 
         // Output directory is not required when listing asset types
-        if (!_listAssetTypes && !_extractTextures && string.IsNullOrEmpty(_projectDir))
+        if (!_listAssetTypes && !_extractTextures && !_dumpBlueprints && !_moveBlueprints && string.IsNullOrEmpty(_projectDir))
         {
             Console.WriteLine("Error: --output is required");
             return false;
         }
 
-        if (!Directory.Exists(_pakDir))
+        // move-blueprints requires --source and --cooked (--pakdir not required)
+        if (_moveBlueprints)
+        {
+            if (string.IsNullOrEmpty(_moveBlueprintsSource))
+            {
+                Console.WriteLine("Error: --move-blueprints requires --source <projectDir>");
+                return false;
+            }
+            if (string.IsNullOrEmpty(_moveBlueprintsCooked))
+            {
+                Console.WriteLine("Error: --move-blueprints requires --cooked <cookedDir>");
+                return false;
+            }
+        }
+
+        if (!_moveBlueprints && !Directory.Exists(_pakDir))
         {
             Console.WriteLine($"Error: Pak directory does not exist: {_pakDir}");
             return false;
@@ -268,17 +363,35 @@ public class Program
         Console.WriteLine("  --print-skipped           Print skipped assets");
         Console.WriteLine("  --list-asset-types, -l    List all asset types in pak files and exit");
         Console.WriteLine("  --extract-textures, -e    Extract all textures as PNG files");
+        Console.WriteLine("  --dump-blueprints, -b     Dump Blueprint/WidgetBlueprint asset info to a txt file");
+        Console.WriteLine("  --blueprint-output, -bo <path>  Output path for blueprint dump (default: BlueprintDump.txt)");
+        Console.WriteLine("  --asset-registry, -ar <path>    Path to a pre-extracted AssetRegistry.bin file");
+        Console.WriteLine("  --move-blueprints, -mb    Copy blueprint assets from project dir to cooked dir (no pak required)");
+        Console.WriteLine("  --source, -s <path>       Source project root (e.g. F:\\Subnautica2 Modding\\Projects\\Subnautica2)");
+        Console.WriteLine("  --cooked, -c <path>       Destination cooked dir (e.g. F:\\Subnautica2 Modding\\Cooked)");
+        Console.WriteLine("  --dry-run, -dr            Simulate --move-blueprints without copying any files");
+        Console.WriteLine("  --asset-types, -at <path> Path to asset types filter file (default: AssetTypes.txt next to exe)");
         Console.WriteLine("  --help, -h                Show this help message");
         Console.WriteLine();
-        Console.WriteLine("Asset types to export should be listed in AssetTypes.txt (one per line)");
+        Console.WriteLine("Asset types to export should be listed in AssetTypes.txt (or path given by --asset-types), one per line.");
         Console.WriteLine("in the same directory as the executable.");
         Console.WriteLine();
         Console.WriteLine("Example:");
         Console.WriteLine("  CookedExport -p \"C:\\Game\\Paks\" -o \"C:\\Output\" -m \"mappings.usmap\"");
     }
 
-    private static bool LoadAssetTypesFromFile(string filePath)
+    private static string ResolveAssetTypesFilePath()
     {
+        if (!string.IsNullOrEmpty(_assetTypesFile))
+        {
+            return Path.IsPathRooted(_assetTypesFile)
+                ? _assetTypesFile
+                : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _assetTypesFile);
+        }
+        return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AssetTypes.txt");
+    }
+
+    private static bool LoadAssetTypesFromFile(string filePath)    {
         try
         {
             if (!File.Exists(filePath))
@@ -302,7 +415,7 @@ public class Program
 
             if (_assetTypesToCopy.Count == 0)
             {
-                Console.WriteLine("Warning: No asset types found in AssetTypes.txt");
+                Console.WriteLine($"Warning: No asset types found in {filePath}");
                 return false;
             }
 
@@ -313,6 +426,105 @@ public class Program
             Console.WriteLine($"Error loading asset types from file: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Attempts to load the AssetRegistry from the provider by trying multiple common paths.
+    /// Falls back to building a minimal asset list from provider.Files when the registry is empty or missing.
+    /// </summary>
+    private static List<FAssetData> LoadAssetRegistry(DefaultFileProvider provider)
+    {
+        List<FAssetData> assets = new();
+
+        // If an external AssetRegistry.bin was provided, use it directly
+        if (!string.IsNullOrEmpty(_assetRegistryPath))
+        {
+            if (File.Exists(_assetRegistryPath))
+            {
+                try
+                {
+                    var bytes = File.ReadAllBytes(_assetRegistryPath);
+                    using var archive = new FByteArchive(_assetRegistryPath, bytes, provider.Versions);
+                    assets.AddRange(new FAssetRegistryState(archive).PreallocatedAssetDataBuffers);
+                    Console.WriteLine($"Loaded external AssetRegistry from: {_assetRegistryPath} ({assets.Count} entries)");
+                    return assets;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Failed to read external AssetRegistry at {_assetRegistryPath}: {ex.Message}");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"Warning: External AssetRegistry not found: {_assetRegistryPath}");
+            }
+        }
+
+        // Try common AssetRegistry paths
+        var candidates = new[]
+        {
+            $"{provider.ProjectName}/AssetRegistry.bin",
+            $"{provider.ProjectName}/Content/AssetRegistry.bin",
+            "AssetRegistry.bin",
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (provider.TryGetGameFile(candidate, out var registryFile))
+            {
+                try
+                {
+                    var bytes = registryFile.Read();
+                    using var archive = new FByteArchive(candidate, bytes, provider.Versions);
+                    assets.AddRange(new FAssetRegistryState(archive).PreallocatedAssetDataBuffers);
+                    if (assets.Count > 0)
+                    {
+                        Console.WriteLine($"Loaded AssetRegistry from: {candidate} ({assets.Count} entries)");
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Failed to read registry at {candidate}: {ex.Message}");
+                }
+            }
+        }
+
+        // If still nothing, check for plugin asset registries (IoStore games often have per-plugin registries)
+        if (assets.Count == 0)
+        {
+            var pluginRegistries = provider.Files.Keys
+                .Where(k => k.EndsWith("AssetRegistry.bin", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var regPath in pluginRegistries)
+            {
+                if (provider.TryGetGameFile(regPath, out var registryFile))
+                {
+                    try
+                    {
+                        var bytes = registryFile.Read();
+                        using var archive = new FByteArchive(regPath, bytes, provider.Versions);
+                        var entries = new FAssetRegistryState(archive).PreallocatedAssetDataBuffers;
+                        assets.AddRange(entries);
+                        Console.WriteLine($"Loaded plugin AssetRegistry: {regPath} ({entries.Length} entries)");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Warning: Failed to read registry at {regPath}: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        // Last resort: synthesize asset data from file paths (covers IoStore stripped registry)
+        if (assets.Count == 0)
+        {
+            Console.WriteLine("No AssetRegistry found or it was empty. Falling back to file-based scanning...");
+            // Return empty – callers will handle file-based fallback
+        }
+
+        return assets;
     }
 
     private static async Task ListAssetTypes()
@@ -330,28 +542,61 @@ public class Program
         
         await provider.MountAsync();
 
-        List<FAssetData> assets = new();
-        var assetRegistryPath = $"{provider.ProjectName}/AssetRegistry.bin";
-        
-        if (provider.TryGetGameFile(assetRegistryPath, out var assetRegistryFile))
-        {
-            var assetArchive = await assetRegistryFile.SafeCreateReaderAsync();
-            if (assetArchive is not null)
-            {
-                assets.AddRange(new FAssetRegistryState(assetArchive).PreallocatedAssetDataBuffers);
-            }
-        }
+        var assets = LoadAssetRegistry(provider);
 
-        var gameAssets = assets.Where(asset => asset.PackagePath.ToString().StartsWith("/Game")).ToList();
-        Console.WriteLine($"Found {gameAssets.Count} assets in registry...\n");
+        var gameAssets = assets.ToList();
+
+        if (gameAssets.Count == 0)
+        {
+            Console.WriteLine("Using file-based fallback for asset type discovery (IoStore mode)...\n");
+        }
+        else
+        {
+            Console.WriteLine($"Found {gameAssets.Count} assets in registry...\n");
+        }
 
         // Collect all unique asset types with counts
         var assetTypeCounts = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        
-        foreach (var asset in gameAssets)
+
+        if (gameAssets.Count > 0)
         {
-            var assetClass = asset.AssetClass.Text;
-            assetTypeCounts.AddOrUpdate(assetClass, 1, (key, oldValue) => oldValue + 1);
+            foreach (var asset in gameAssets)
+            {
+                var assetClass = asset.AssetClass.Text;
+                assetTypeCounts.AddOrUpdate(assetClass, 1, (key, oldValue) => oldValue + 1);
+            }
+        }
+        else
+        {
+            // IoStore fallback: load each file and inspect the primary export type
+            var gameContentPrefix = $"{provider.ProjectName}/Content/";
+            var gamePluginsPrefix = $"{provider.ProjectName}/Plugins/";
+            var gameFiles = provider.Files.Values
+                .Where(f => (f.Path.StartsWith(gameContentPrefix, StringComparison.OrdinalIgnoreCase) ||
+                             f.Path.StartsWith(gamePluginsPrefix, StringComparison.OrdinalIgnoreCase))
+                            && !f.Path.EndsWith(".uexp", StringComparison.OrdinalIgnoreCase)
+                            && !f.Path.EndsWith(".ubulk", StringComparison.OrdinalIgnoreCase)
+                            && !f.Path.EndsWith(".uptnl", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            Console.WriteLine($"Scanning {gameFiles.Count} files...\n");
+
+            var parallelOptions = new ParallelOptions();
+            if (!_useMultiThreading) parallelOptions.MaxDegreeOfParallelism = 1;
+            else if (_maxDegreeOfParallelism > 0) parallelOptions.MaxDegreeOfParallelism = _maxDegreeOfParallelism;
+
+            Parallel.ForEach(gameFiles, parallelOptions, file =>
+            {
+                try
+                {
+                    var pkg = provider.LoadPackage(file);
+                    var primary = pkg?.GetExports().FirstOrDefault();
+                    if (primary == null) return;
+                    var typeName = primary.ExportType;
+                    assetTypeCounts.AddOrUpdate(typeName, 1, (_, v) => v + 1);
+                }
+                catch { /* skip unreadable */ }
+            });
         }
 
         // Write to file
@@ -395,25 +640,14 @@ public class Program
 
         Console.WriteLine($"Output directory: {outputDir}\n");
 
-        List<FAssetData> assets = new();
-        var assetRegistryPath = $"{provider.ProjectName}/AssetRegistry.bin";
-        
-        if (provider.TryGetGameFile(assetRegistryPath, out var assetRegistryFile))
-        {
-            var assetArchive = await assetRegistryFile.SafeCreateReaderAsync();
-            if (assetArchive is not null)
-            {
-                assets.AddRange(new FAssetRegistryState(assetArchive).PreallocatedAssetDataBuffers);
-            }
-        }
+        var assets = LoadAssetRegistry(provider);
 
-        // Filter for texture assets
+        // Filter for texture assets - registry-based
         var textureAssets = assets.Where(asset => 
-            asset.PackagePath.ToString().StartsWith("/Game") &&
-            (asset.AssetClass.Text.Equals("Texture2D", StringComparison.OrdinalIgnoreCase) ||
+            asset.AssetClass.Text.Equals("Texture2D", StringComparison.OrdinalIgnoreCase) ||
              asset.AssetClass.Text.Equals("TextureCube", StringComparison.OrdinalIgnoreCase) ||
              asset.AssetClass.Text.Equals("Texture2DArray", StringComparison.OrdinalIgnoreCase) ||
-             asset.AssetClass.Text.Equals("TextureRenderTarget2D", StringComparison.OrdinalIgnoreCase))
+             asset.AssetClass.Text.Equals("TextureRenderTarget2D", StringComparison.OrdinalIgnoreCase)
         ).ToList();
 
         Console.WriteLine($"Found {textureAssets.Count} texture assets in registry...\n");
@@ -431,24 +665,66 @@ public class Program
         var successCount = 0;
         var failCount = 0;
 
-        if (_useMultiThreading)
+        if (textureAssets.Count > 0)
         {
-            Parallel.ForEach(textureAssets, parallelOptions, asset =>
+            // Registry-based extraction
+            if (_useMultiThreading)
             {
-                if (ExtractTexture(provider, asset, outputDir))
-                    Interlocked.Increment(ref successCount);
-                else
-                    Interlocked.Increment(ref failCount);
-            });
+                Parallel.ForEach(textureAssets, parallelOptions, asset =>
+                {
+                    if (ExtractTexture(provider, asset, outputDir))
+                        Interlocked.Increment(ref successCount);
+                    else
+                        Interlocked.Increment(ref failCount);
+                });
+            }
+            else
+            {
+                foreach (var asset in textureAssets)
+                {
+                    if (ExtractTexture(provider, asset, outputDir))
+                        successCount++;
+                    else
+                        failCount++;
+                }
+            }
         }
         else
         {
-            foreach (var asset in textureAssets)
+            // IoStore fallback: scan provider.Files for uasset/uexp/utoc that match texture paths
+            Console.WriteLine("Registry returned 0 textures. Falling back to file-based texture scanning (IoStore mode)...\n");
+
+            var gameContentPrefix = $"{provider.ProjectName}/Content/";
+            var gamePluginsPrefix = $"{provider.ProjectName}/Plugins/";
+            var textureFiles = provider.Files.Values
+                .Where(f => (f.Path.StartsWith(gameContentPrefix, StringComparison.OrdinalIgnoreCase) ||
+                             f.Path.StartsWith(gamePluginsPrefix, StringComparison.OrdinalIgnoreCase))
+                            && !f.Path.EndsWith(".uexp", StringComparison.OrdinalIgnoreCase)
+                            && !f.Path.EndsWith(".ubulk", StringComparison.OrdinalIgnoreCase)
+                            && !f.Path.EndsWith(".uptnl", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            Console.WriteLine($"Scanning {textureFiles.Count} asset files for textures...\n");
+
+            if (_useMultiThreading)
             {
-                if (ExtractTexture(provider, asset, outputDir))
-                    successCount++;
-                else
-                    failCount++;
+                Parallel.ForEach(textureFiles, parallelOptions, file =>
+                {
+                    if (ExtractTextureFromFile(provider, file, outputDir))
+                        Interlocked.Increment(ref successCount);
+                    else
+                        Interlocked.Increment(ref failCount);
+                });
+            }
+            else
+            {
+                foreach (var file in textureFiles)
+                {
+                    if (ExtractTextureFromFile(provider, file, outputDir))
+                        successCount++;
+                    else
+                        failCount++;
+                }
             }
         }
 
@@ -469,8 +745,20 @@ public class Program
 
             var contentDir = provider.ProjectName + "/Content";
             var name = asset.AssetName.ToString();
-            var dir = asset.PackagePath.ToString().Remove(0, 5); // Remove "/Game"
-            var assetPath = Path.Join(contentDir, dir, name).Replace(Path.DirectorySeparatorChar, '/');
+            var packagePath = asset.PackagePath.ToString();
+            string assetPath;
+            string dir;
+            if (packagePath.StartsWith("/Game", StringComparison.OrdinalIgnoreCase))
+            {
+                dir = packagePath.Substring(5); // remove "/Game"
+                assetPath = Path.Join(contentDir, dir, name).Replace(Path.DirectorySeparatorChar, '/');
+            }
+            else
+            {
+                var pluginRelDir = packagePath.TrimStart('/');
+                assetPath = $"{provider.ProjectName}/Plugins/{pluginRelDir}/{name}";
+                dir = "/" + pluginRelDir;
+            }
 
             // Load the texture object directly
             if (!provider.TryLoadPackageObject<UTexture>(assetPath, out var texture))
@@ -549,6 +837,72 @@ public class Program
         }
     }
 
+    private static async Task DumpBlueprints()
+    {
+        var provider = new DefaultFileProvider(_pakDir, SearchOption.TopDirectoryOnly,
+            new VersionContainer(_version), StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrEmpty(_mapping))
+            provider.MappingsContainer = new FileUsmapTypeMappingsProvider(_mapping);
+
+        provider.Initialize();
+
+        if (!string.IsNullOrEmpty(_aesKey))
+            await provider.SubmitKeyAsync(new FGuid(), new FAesKey(_aesKey));
+
+        await provider.MountAsync();
+        List<FAssetData> assets = new();
+        assets.AddRange(LoadAssetRegistry(provider));
+
+        // Filter using _assetTypesToCopy if loaded, otherwise use sensible defaults
+        var bpFilterTypes = _assetTypesToCopy.Count > 0
+            ? _assetTypesToCopy
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "BlueprintGeneratedClass", 
+                "UBlueprintGeneratedClass",
+                "WidgetBlueprintGeneratedClass",
+                "UWidgetBlueprintGeneratedClass",
+                "AnimBlueprintGeneratedClass",
+                "RigVMBlueprintGeneratedClass",
+                "GameplayAbilityBlueprint",
+                "ControlRigBlueprintGeneratedClass"
+            };
+
+        var blueprintAssets = assets.Where(asset =>
+            bpFilterTypes.Contains(asset.AssetClass.Text)
+        ).ToList();
+
+        Console.WriteLine($"Found {blueprintAssets.Count} blueprint/widget assets in registry...\n");
+
+        var outputPath = Path.IsPathRooted(_blueprintDumpOutput)
+            ? _blueprintDumpOutput
+            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _blueprintDumpOutput);
+
+        using var writer = new StreamWriter(outputPath, false);
+
+        int count = 0;
+
+        if (blueprintAssets.Count > 0)
+        {
+            // Registry-based path
+            foreach (var asset in blueprintAssets)
+            {
+                if (!asset.PackagePath.ToString().StartsWith("/Game", StringComparison.OrdinalIgnoreCase) && 
+                    !asset.PackagePath.ToString().StartsWith("/UWE", StringComparison.OrdinalIgnoreCase)  &&
+                    !asset.PackagePath.ToString().StartsWith("/MeshBlend", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Skip engine assets
+                    continue;
+                }
+                var line = FormatBlueprintLine(asset);
+                writer.WriteLine(line);
+                count++;
+                if (_printSuccess) Console.WriteLine(line);
+            }
+        }
+    }
+
     private static async Task ExportAssets()
     {
         var provider = new DefaultFileProvider(_pakDir, SearchOption.TopDirectoryOnly,
@@ -569,19 +923,9 @@ public class Program
 
     private static async Task ExportFromAssetRegistry(DefaultFileProvider provider)
     {
-        List<FAssetData> assets = new();
-        var assetRegistryPath = $"{provider.ProjectName}/AssetRegistry.bin";
-        
-        if (provider.TryGetGameFile(assetRegistryPath, out var assetRegistryFile))
-        {
-            var assetArchive = await assetRegistryFile.SafeCreateReaderAsync();
-            if (assetArchive is not null)
-            {
-                assets.AddRange(new FAssetRegistryState(assetArchive).PreallocatedAssetDataBuffers);
-            }
-        }
+        var assets = LoadAssetRegistry(provider);
 
-        var gameAssets = assets.Where(asset => asset.PackagePath.ToString().StartsWith("/Game")).ToList();
+        var gameAssets = assets.ToList();
         Console.WriteLine($"Found {gameAssets.Count} assets in registry...\n");
 
         var parallelOptions = new ParallelOptions();
@@ -594,22 +938,19 @@ public class Program
             parallelOptions.MaxDegreeOfParallelism = 1;
         }
 
-        if (_useMultiThreading)
+        if (gameAssets.Count > 0)
         {
-            Parallel.ForEach(gameAssets, parallelOptions, asset =>
+            // Registry-based export
+            if (_useMultiThreading)
             {
-                ProcessAsset(provider, asset);
-            });
-        }
-        else
-        {
-            foreach (var asset in gameAssets)
+                Parallel.ForEach(gameAssets, parallelOptions, asset => { ProcessAsset(provider, asset); });
+            }
+            else
             {
-                ProcessAsset(provider, asset);
+                foreach (var asset in gameAssets) ProcessAsset(provider, asset);
             }
         }
     }
-
 
     private static void ProcessAsset(DefaultFileProvider provider, FAssetData asset)
     {
@@ -629,10 +970,28 @@ public class Program
                 return;
             }
 
-            var contentDir = provider.ProjectName + "/Content";
             var name = asset.AssetName.ToString();
-            var dir = asset.PackagePath.ToString().Remove(0, 5);
-            var path = Path.Join(contentDir, dir, name).Replace(Path.DirectorySeparatorChar, '/');
+            var packagePath = asset.PackagePath.ToString();
+
+            // Build physical path: strip leading "/Game" -> map to ProjectName/Content,
+            // or for plugin assets ("/PluginName/...") -> map to ProjectName/Plugins/PluginName/Content/...
+            // The simplest approach: use asset.PackageName which gives "/Game/Dir/Name" or "/PluginMount/Dir/Name"
+            // and let CopyAssetFiles resolve via TryGetGameFile which uses VFS paths.
+            string path;
+            if (packagePath.StartsWith("/Game", StringComparison.OrdinalIgnoreCase))
+            {
+                var dir = packagePath.Substring(5); // remove "/Game"
+                var contentDir = provider.ProjectName + "/Content";
+                path = Path.Join(contentDir, dir, name).Replace(Path.DirectorySeparatorChar, '/');
+            }
+            else
+            {
+                // Plugin-mounted path: packagePath like "/PluginName/SubDir"
+                // Provider VFS has it as "ProjectName/Plugins/PluginName/Content/SubDir"
+                // but we can also just try loading by package name directly
+                var dir = packagePath.TrimStart('/');
+                path = $"{provider.ProjectName}/Plugins/{dir}/{name}";
+            }
             
             CopyAssetFiles(provider, path, assetClass);
         }
@@ -649,16 +1008,33 @@ public class Program
     {
         try
         {
-            // Extract the path after "Content/" to build the target directory
+            // Determine if this is a plugin asset (contains /Plugins/) or a regular content asset
+            var pluginsIndex = assetPath.IndexOf("/Plugins/", StringComparison.OrdinalIgnoreCase);
             var contentIndex = assetPath.IndexOf("/Content/", StringComparison.OrdinalIgnoreCase);
-            if (contentIndex == -1) return;
 
-            var relativePath = assetPath.Substring(contentIndex + "/Content/".Length);
+            string relativePath;
+            string baseFolder;
+
+            if (pluginsIndex >= 0)
+            {
+                // e.g. ProjectName/Plugins/PluginName/Content/Sub/Asset -> Plugins/PluginName/Content/Sub/Asset
+                relativePath = assetPath.Substring(pluginsIndex + 1); // strip leading slash
+                baseFolder = string.Empty; // full relative path already includes Plugins/...
+            }
+            else if (contentIndex >= 0)
+            {
+                relativePath = assetPath.Substring(contentIndex + "/Content/".Length);
+                baseFolder = "Content";
+            }
+            else return;
+
             var fileName = Path.GetFileName(relativePath);
             var dirPath = Path.GetDirectoryName(relativePath);
 
             // Build target directory
-            var targetDir = Path.Join(_projectDir, "Content", dirPath);
+            var targetDir = string.IsNullOrEmpty(baseFolder)
+                ? Path.Join(_projectDir, dirPath)
+                : Path.Join(_projectDir, baseFolder, dirPath);
             EnsureDirectoryExists(targetDir);
 
             var targetUassetPath = Path.Join(targetDir, fileName + ".uasset");
@@ -744,8 +1120,282 @@ public class Program
         }
     }
 
-    private static void EnsureDirectoryExists(string path)
+    private static string FormatBlueprintLine(FAssetData asset)
     {
+        var assetType = asset.AssetClass.Text;
+        var packageName = asset.PackageName.ToString(); // e.g. /Game/Art/Animation/.../ABP_SN2PlayerCharacter_Main
+        var name = packageName.Substring(packageName.LastIndexOf('/') + 1);
+        var path = asset.PackagePath.ToString() + "/";
+
+        string parentClass = string.Empty;
+        if (asset.TagsAndValues != null)
+        {
+            var parentKey = asset.TagsAndValues.Keys
+                .FirstOrDefault(k => k.Text.Equals("ParentClass", StringComparison.OrdinalIgnoreCase));
+            if (parentKey != null)
+                parentClass = asset.TagsAndValues[parentKey];
+        }
+
+        return $"\"{assetType}\",\"{name}\",\"{path}\",\"{parentClass}\";";
+    }
+
+    /// <summary>
+    /// IoStore fallback: tries to load a file as a UTexture and encode it to PNG.
+    /// </summary>
+    private static bool ExtractTextureFromFile(DefaultFileProvider provider, GameFile file, string outputDir)
+    {
+        try
+        {
+            var pkg = provider.LoadPackage(file);
+            if (pkg == null) return false;
+
+            var texture = pkg.GetExports().OfType<UTexture>().FirstOrDefault();
+            if (texture == null) return false;
+
+            var processed = Interlocked.Increment(ref _processedAssets);
+            if (processed % 100 == 0)
+                Console.WriteLine($"Processed {processed} textures...");
+
+            var bitmap = texture.Decode(_texturePlatform);
+            if (bitmap == null)
+            {
+                lock (Console.Out) Console.WriteLine($"[FAIL] Could not decode texture: {file.Name}");
+                return false;
+            }
+
+            if (texture is UTextureCube)
+                bitmap = bitmap.ToPanorama();
+
+            var pngBytes = bitmap.Encode(ETextureFormat.Png, false, out var extension);
+
+            // Build relative output path: handle both Content and Plugins paths
+            var path = file.PathWithoutExtension;
+            var pluginsMarker = "/Plugins/";
+            var pluginsIdx = path.IndexOf(pluginsMarker, StringComparison.OrdinalIgnoreCase);
+            var contentMarker = "/Content/";
+            var contentIdx = path.IndexOf(contentMarker, StringComparison.OrdinalIgnoreCase);
+
+            string relativePath;
+            if (pluginsIdx >= 0)
+            {
+                // Preserve full Plugins/PluginName/Content/... structure
+                relativePath = path.Substring(pluginsIdx + 1); // Plugins/...
+            }
+            else if (contentIdx >= 0)
+            {
+                relativePath = path.Substring(contentIdx + contentMarker.Length);
+            }
+            else
+            {
+                relativePath = path.TrimStart('/');
+            }
+
+            var name = Path.GetFileName(relativePath);
+            var dirPart = Path.GetDirectoryName(relativePath) ?? string.Empty;
+            var targetDir = Path.Combine(outputDir, dirPart);
+            EnsureDirectoryExists(targetDir);
+
+            var targetPath = Path.Combine(targetDir, $"{name}.{extension}");
+
+            if (!_replaceExisting && File.Exists(targetPath))
+            {
+                Interlocked.Increment(ref _skippedAssets);
+                if (_printSkipped)
+                    lock (Console.Out) Console.WriteLine($"[SKIP] Already exists: {name}");
+                return false;
+            }
+
+            File.WriteAllBytes(targetPath, pngBytes);
+
+            if (_printSuccess)
+                lock (Console.Out) Console.WriteLine($"[EXPORT] {name}.{extension} ({bitmap.Width}x{bitmap.Height})");
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Copies files from the source project directory (Content and Plugins/*/Content) whose .uasset
+    /// asset class matches the filters, into the cooked output directory preserving structure.
+    /// Uses the AssetRegistry (--asset-registry / -ar) to determine asset class when filtering.
+    /// </summary>
+    private static void MoveAssets()
+    {
+        var source = _moveBlueprintsSource;
+        var cooked = _moveBlueprintsCooked;
+
+        if (!Directory.Exists(source))
+        {
+            Console.WriteLine($"Error: Source directory does not exist: {source}");
+            return;
+        }
+
+        // Build asset class lookup from the AssetRegistry if a filter is active
+        // Key: package name lower-case (e.g. "/game/assets/foo/bar"), Value: asset class text
+        Dictionary<string, string> arClassByPackage = null;
+
+        if (_assetTypesToCopy.Count > 0)
+        {
+            if (!string.IsNullOrEmpty(_assetRegistryPath) && File.Exists(_assetRegistryPath))
+            {
+                try
+                {
+                    Console.WriteLine($"Loading AssetRegistry for filtering: {_assetRegistryPath}");
+                    var bytes = File.ReadAllBytes(_assetRegistryPath);
+                    // FByteArchive needs a VersionContainer - use a minimal one
+                    using var archive = new FByteArchive(_assetRegistryPath, bytes, new VersionContainer(_version));
+                    var arState = new FAssetRegistryState(archive);
+                    arClassByPackage = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var entry in arState.PreallocatedAssetDataBuffers)
+                    {
+                        var pkgName = entry.PackageName.ToString(); // e.g. /Game/Assets/Foo/Bar
+                        var cls = entry.AssetClass.Text;
+                        arClassByPackage[pkgName] = cls;
+                    }
+                    Console.WriteLine($"AssetRegistry loaded: {arClassByPackage.Count} entries\n");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Could not load AssetRegistry for filtering: {ex.Message}");
+                    Console.WriteLine("Proceeding without asset type filtering - all .uasset files will be moved.\n");
+                }
+            }
+            else
+            {
+                Console.WriteLine("Warning: --asset-types filter is set but no --asset-registry (-ar) was provided.");
+                Console.WriteLine("Cannot determine asset class without the AssetRegistry.");
+                Console.WriteLine("Proceeding without filtering - all .uasset files will be moved.\n");
+            }
+        }
+
+        // Collect scan roots: Content and Plugins/*/Content
+        var scanRoots = new List<(string rootDir, string relBase)>();
+
+        var contentDir = Path.Combine(source, "Content");
+        if (Directory.Exists(contentDir))
+            scanRoots.Add((contentDir, "Content"));
+
+        var pluginsDir = Path.Combine(source, "Plugins");
+        if (Directory.Exists(pluginsDir))
+        {
+            foreach (var pluginDir in Directory.GetDirectories(pluginsDir))
+            {
+                var pluginContentDir = Path.Combine(pluginDir, "Content");
+                if (Directory.Exists(pluginContentDir))
+                {
+                    var pluginName = Path.GetFileName(pluginDir);
+                    scanRoots.Add((pluginContentDir, Path.Combine("Plugins", pluginName, "Content")));
+                }
+            }
+        }
+
+        var uassetFiles = scanRoots
+            .SelectMany(r => Directory.EnumerateFiles(r.rootDir, "*.uasset", SearchOption.AllDirectories)
+                .Select(f => (file: f, rootDir: r.rootDir, relBase: r.relBase)))
+            .ToList();
+
+        Console.WriteLine($"Found {uassetFiles.Count} .uasset files to scan...\n");
+        if (_assetTypesToCopy.Count > 0 && arClassByPackage != null)
+            Console.WriteLine($"Filtering by {_assetTypesToCopy.Count} asset type(s) using AssetRegistry index\n");
+        if (_dryRun)
+            Console.WriteLine("[DRY RUN] No files will be moved.\n");
+
+        int moved = 0, skipped = 0, failed = 0;
+
+        foreach (var (filePath, rootDir, relBase) in uassetFiles)
+        {
+            try
+            {
+                var relPath = Path.GetRelativePath(rootDir, filePath);
+
+                // Filter by asset class using AR index if available
+                if (_assetTypesToCopy.Count > 0 && arClassByPackage != null)
+                {
+                    // Derive the package name from the file path
+                    // relBase is either "Content" or "Plugins/PluginName/Content"
+                    // relPath is e.g. "Assets\Foo\Bar.uasset"
+                    var packageRelPath = Path.ChangeExtension(relPath, null); // strip .uasset
+                    string packageName;
+
+                    if (relBase.Equals("Content", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Content/Assets/Foo/Bar -> /Game/Assets/Foo/Bar
+                        packageName = "/Game/" + packageRelPath.Replace(Path.DirectorySeparatorChar, '/');
+                    }
+                    else
+                    {
+                        // Plugins/PluginName/Content/Assets/Foo/Bar -> /PluginName/Assets/Foo/Bar
+                        // relBase = "Plugins/PluginName/Content"
+                        var parts = relBase.Replace('\\', '/').Split('/');
+                        // parts[0]=Plugins, parts[1]=PluginName, parts[2]=Content
+                        var pluginName = parts.Length >= 2 ? parts[1] : "Unknown";
+                        packageName = "/" + pluginName + "/" + packageRelPath.Replace(Path.DirectorySeparatorChar, '/');
+                    }
+
+                    if (!arClassByPackage.TryGetValue(packageName, out var assetClass) ||
+                        !_assetTypesToCopy.Contains(assetClass))
+                    {
+                        skipped++;
+                        if (_printSkipped)
+                            Console.WriteLine($"[SKIP] Not in filter (class={assetClass ?? "unknown"}): {packageName}");
+                        continue;
+                    }
+                }
+
+                var targetPath = Path.Combine(cooked, relBase, relPath);
+
+                if (!_replaceExisting && File.Exists(targetPath))
+                {
+                    skipped++;
+                    if (_printSkipped)
+                        Console.WriteLine($"[SKIP] Already exists: {relBase}/{relPath}");
+                    continue;
+                }
+
+                if (_dryRun)
+                {
+                    Console.WriteLine($"[DRY RUN] Would move: {relBase}/{relPath}");
+                    moved++;
+                    continue;
+                }
+
+                var targetDir = Path.GetDirectoryName(targetPath)!;
+                Directory.CreateDirectory(targetDir);
+                File.Move(filePath, targetPath, overwrite: true);
+
+                // Move associated files (.uexp, .ubulk, .uptnl)
+                var basePath = Path.ChangeExtension(filePath, null);
+                foreach (var ext in new[] { ".uexp", ".ubulk", ".uptnl" })
+                {
+                    var sidecar = basePath + ext;
+                    if (File.Exists(sidecar))
+                    {
+                        var sidecarTarget = Path.ChangeExtension(targetPath, null) + ext;
+                        File.Move(sidecar, sidecarTarget, overwrite: true);
+                    }
+                }
+
+                moved++;
+                if (_printSuccess)
+                    Console.WriteLine($"[MOVE] {relBase}/{relPath}");
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                Console.WriteLine($"[ERROR] {filePath}: {ex.Message}");
+            }
+        }
+
+        Console.WriteLine(_dryRun
+            ? $"\n[DRY RUN] Would move: {moved}, Would skip: {skipped}, Errors: {failed}"
+            : $"\nDone! Moved: {moved}, Skipped: {skipped}, Failed: {failed}");
+    }
+
+    private static void EnsureDirectoryExists(string path)    {
         if (string.IsNullOrEmpty(path)) return;
 
         lock (_dirCreationLock)
