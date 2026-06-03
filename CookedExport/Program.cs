@@ -43,10 +43,12 @@ public class Program
     private static string _moveBlueprintsCooked = null;
     private static bool _dryRun = false;
     private static string _assetTypesFile = null;
+    private static string _blacklistAssetTypesFile = null;
     
     private const string AssetTypesList = "DiscoveredAssetTypes.txt";
     
     private static readonly HashSet<string> _assetTypesToCopy = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> _assetTypesToExclude = new(StringComparer.OrdinalIgnoreCase);
     
     private static readonly Dictionary<string, int> _copiedCounts = new();
     private static readonly object _countLock = new object();
@@ -105,9 +107,13 @@ public class Program
             // If in move-blueprints mode, move matching assets from project dir to cooked dir
             if (_moveBlueprints)
             {
-                // Load asset types filter from file (optional for -mb; if not found, all uassets are moved)
-                var mbAssetTypesFile = ResolveAssetTypesFilePath();
-                LoadAssetTypesFromFile(mbAssetTypesFile);
+                // Load asset type filter from file (optional for -mb; if not found, all uassets are moved)
+                if (!LoadAssetTypeFilters(requireFilter: false))
+                {
+                    Console.WriteLine("\nPress any key to exit...");
+                    Console.ReadKey();
+                    return;
+                }
 
                 Console.WriteLine("Moving blueprint assets from project to cooked directory...\n");
                 MoveAssets();
@@ -116,21 +122,30 @@ public class Program
                 return;
             }
 
-            // Load asset types from file for export mode
-            var assetTypesFile = ResolveAssetTypesFilePath();
-            if (!LoadAssetTypesFromFile(assetTypesFile))
+            // Load asset type filter from file for export mode
+            if (!LoadAssetTypeFilters(requireFilter: true))
             {
-                Console.WriteLine($"Error: Could not load asset types from {assetTypesFile}");
                 Console.WriteLine("\nPress any key to exit...");
                 Console.ReadKey();
                 return;
             }
 
             Console.WriteLine($"Target: {_projectDir}");
-            Console.WriteLine($"Asset Types Enabled ({_assetTypesToCopy.Count}):");
-            foreach (var assetType in _assetTypesToCopy.OrderBy(x => x))
+            if (_assetTypesToCopy.Count > 0)
             {
-                Console.WriteLine($"  - {assetType}");
+                Console.WriteLine($"Asset Types Whitelisted ({_assetTypesToCopy.Count}):");
+                foreach (var assetType in _assetTypesToCopy.OrderBy(x => x))
+                {
+                    Console.WriteLine($"  - {assetType}");
+                }
+            }
+            else if (_assetTypesToExclude.Count > 0)
+            {
+                Console.WriteLine($"Asset Types Blacklisted ({_assetTypesToExclude.Count}):");
+                foreach (var assetType in _assetTypesToExclude.OrderBy(x => x))
+                {
+                    Console.WriteLine($"  - {assetType}");
+                }
             }
             
             Console.WriteLine($"\nMulti-threading: {(_useMultiThreading ? "Enabled" : "Disabled")}");
@@ -291,6 +306,12 @@ public class Program
                     if (i + 1 < args.Length)
                         _assetTypesFile = args[++i];
                     break;
+
+                case "--blacklist-asset-types":
+                case "-bat":
+                    if (i + 1 < args.Length)
+                        _blacklistAssetTypesFile = args[++i];
+                    break;
                 
                 case "--help":
                 case "-h":
@@ -338,6 +359,12 @@ public class Program
             return false;
         }
 
+        if (!string.IsNullOrEmpty(_assetTypesFile) && !string.IsNullOrEmpty(_blacklistAssetTypesFile))
+        {
+            Console.WriteLine("Error: --asset-types and --blacklist-asset-types cannot be used together.");
+            return false;
+        }
+
         return true;
     }
 
@@ -371,10 +398,12 @@ public class Program
         Console.WriteLine("  --cooked, -c <path>       Destination cooked dir (e.g. F:\\Subnautica2 Modding\\Cooked)");
         Console.WriteLine("  --dry-run, -dr            Simulate --move-blueprints without copying any files");
         Console.WriteLine("  --asset-types, -at <path> Path to asset types filter file (default: AssetTypes.txt next to exe)");
+        Console.WriteLine("  --blacklist-asset-types, -bat <path>  Path to blacklist asset types file");
         Console.WriteLine("  --help, -h                Show this help message");
         Console.WriteLine();
-        Console.WriteLine("Asset types to export should be listed in AssetTypes.txt (or path given by --asset-types), one per line.");
-        Console.WriteLine("in the same directory as the executable.");
+        Console.WriteLine("Use --asset-types for whitelist mode (only listed classes are copied/moved).");
+        Console.WriteLine("Use --blacklist-asset-types for blacklist mode (listed classes are skipped).");
+        Console.WriteLine("If --asset-types is omitted, AssetTypes.txt next to the executable is used in export mode.");
         Console.WriteLine();
         Console.WriteLine("Example:");
         Console.WriteLine("  CookedExport -p \"C:\\Game\\Paks\" -o \"C:\\Output\" -m \"mappings.usmap\"");
@@ -391,17 +420,70 @@ public class Program
         return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AssetTypes.txt");
     }
 
-    private static bool LoadAssetTypesFromFile(string filePath)    {
+    private static string ResolveBlacklistAssetTypesFilePath()
+    {
+        if (string.IsNullOrEmpty(_blacklistAssetTypesFile))
+        {
+            return null;
+        }
+
+        return Path.IsPathRooted(_blacklistAssetTypesFile)
+            ? _blacklistAssetTypesFile
+            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _blacklistAssetTypesFile);
+    }
+
+    private static bool LoadAssetTypeFilters(bool requireFilter)
+    {
+        _assetTypesToCopy.Clear();
+        _assetTypesToExclude.Clear();
+
+        if (!string.IsNullOrEmpty(_blacklistAssetTypesFile))
+        {
+            var blacklistPath = ResolveBlacklistAssetTypesFilePath();
+            if (!LoadAssetTypesFromFile(blacklistPath, _assetTypesToExclude, "blacklist"))
+            {
+                Console.WriteLine($"Error: Could not load blacklist asset types from {blacklistPath}");
+                return false;
+            }
+
+            return true;
+        }
+
+        var whitelistPath = ResolveAssetTypesFilePath();
+        var shouldTryWhitelist = requireFilter || !string.IsNullOrEmpty(_assetTypesFile) || File.Exists(whitelistPath);
+
+        if (!shouldTryWhitelist)
+        {
+            return true;
+        }
+
+        if (!LoadAssetTypesFromFile(whitelistPath, _assetTypesToCopy, "whitelist"))
+        {
+            if (requireFilter || !string.IsNullOrEmpty(_assetTypesFile))
+            {
+                Console.WriteLine($"Error: Could not load whitelist asset types from {whitelistPath}");
+                return false;
+            }
+
+            _assetTypesToCopy.Clear();
+            Console.WriteLine($"Warning: Could not load optional whitelist asset types from {whitelistPath}. Continuing without filtering.");
+        }
+
+        return true;
+    }
+
+    private static bool LoadAssetTypesFromFile(string filePath, HashSet<string> targetSet, string filterKind)
+    {
         try
         {
             if (!File.Exists(filePath))
             {
-                Console.WriteLine($"Asset types file not found: {filePath}");
+                Console.WriteLine($"{filterKind} asset types file not found: {filePath}");
                 return false;
             }
 
             var lines = File.ReadAllLines(filePath);
-            _assetTypesToCopy.Clear();
+            targetSet.Clear();
 
             foreach (var line in lines)
             {
@@ -409,11 +491,11 @@ public class Program
                 // Skip empty lines and comments
                 if (!string.IsNullOrWhiteSpace(trimmed) && !trimmed.StartsWith("#") && !trimmed.StartsWith("//"))
                 {
-                    _assetTypesToCopy.Add(trimmed);
+                    targetSet.Add(trimmed);
                 }
             }
 
-            if (_assetTypesToCopy.Count == 0)
+            if (targetSet.Count == 0)
             {
                 Console.WriteLine($"Warning: No asset types found in {filePath}");
                 return false;
@@ -426,6 +508,26 @@ public class Program
             Console.WriteLine($"Error loading asset types from file: {ex.Message}");
             return false;
         }
+    }
+
+    private static bool AssetTypePassesFilter(string assetClass)
+    {
+        if (_assetTypesToCopy.Count > 0)
+        {
+            return !string.IsNullOrEmpty(assetClass) && _assetTypesToCopy.Contains(assetClass);
+        }
+
+        if (_assetTypesToExclude.Count > 0)
+        {
+            return string.IsNullOrEmpty(assetClass) || !_assetTypesToExclude.Contains(assetClass);
+        }
+
+        return true;
+    }
+
+    private static bool HasAssetTypeFilter()
+    {
+        return _assetTypesToCopy.Count > 0 || _assetTypesToExclude.Count > 0;
     }
 
     /// <summary>
@@ -965,7 +1067,7 @@ public class Program
             var assetClass = asset.AssetClass.Text;
             
             // Check if this asset type should be copied
-            if (!_assetTypesToCopy.Contains(assetClass))
+            if (!AssetTypePassesFilter(assetClass))
             {
                 return;
             }
@@ -1238,7 +1340,7 @@ public class Program
         // Key: package name lower-case (e.g. "/game/assets/foo/bar"), Value: asset class text
         Dictionary<string, string> arClassByPackage = null;
 
-        if (_assetTypesToCopy.Count > 0)
+        if (HasAssetTypeFilter())
         {
             if (!string.IsNullOrEmpty(_assetRegistryPath) && File.Exists(_assetRegistryPath))
             {
@@ -1266,7 +1368,7 @@ public class Program
             }
             else
             {
-                Console.WriteLine("Warning: --asset-types filter is set but no --asset-registry (-ar) was provided.");
+                Console.WriteLine("Warning: Asset type filtering is set but no --asset-registry (-ar) was provided.");
                 Console.WriteLine("Cannot determine asset class without the AssetRegistry.");
                 Console.WriteLine("Proceeding without filtering - all .uasset files will be moved.\n");
             }
@@ -1299,8 +1401,13 @@ public class Program
             .ToList();
 
         Console.WriteLine($"Found {uassetFiles.Count} .uasset files to scan...\n");
-        if (_assetTypesToCopy.Count > 0 && arClassByPackage != null)
-            Console.WriteLine($"Filtering by {_assetTypesToCopy.Count} asset type(s) using AssetRegistry index\n");
+        if (arClassByPackage != null)
+        {
+            if (_assetTypesToCopy.Count > 0)
+                Console.WriteLine($"Whitelist filtering by {_assetTypesToCopy.Count} asset type(s) using AssetRegistry index\n");
+            else if (_assetTypesToExclude.Count > 0)
+                Console.WriteLine($"Blacklist filtering by {_assetTypesToExclude.Count} asset type(s) using AssetRegistry index\n");
+        }
         if (_dryRun)
             Console.WriteLine("[DRY RUN] No files will be moved.\n");
 
@@ -1313,7 +1420,7 @@ public class Program
                 var relPath = Path.GetRelativePath(rootDir, filePath);
 
                 // Filter by asset class using AR index if available
-                if (_assetTypesToCopy.Count > 0 && arClassByPackage != null)
+                if (HasAssetTypeFilter() && arClassByPackage != null)
                 {
                     // Derive the package name from the file path
                     // relBase is either "Content" or "Plugins/PluginName/Content"
@@ -1336,12 +1443,17 @@ public class Program
                         packageName = "/" + pluginName + "/" + packageRelPath.Replace(Path.DirectorySeparatorChar, '/');
                     }
 
-                    if (!arClassByPackage.TryGetValue(packageName, out var assetClass) ||
-                        !_assetTypesToCopy.Contains(assetClass))
+                    arClassByPackage.TryGetValue(packageName, out var assetClass);
+                    if (!AssetTypePassesFilter(assetClass))
                     {
                         skipped++;
                         if (_printSkipped)
-                            Console.WriteLine($"[SKIP] Not in filter (class={assetClass ?? "unknown"}): {packageName}");
+                        {
+                            if (_assetTypesToCopy.Count > 0)
+                                Console.WriteLine($"[SKIP] Not in whitelist (class={assetClass ?? "unknown"}): {packageName}");
+                            else
+                                Console.WriteLine($"[SKIP] Matched blacklist (class={assetClass ?? "unknown"}): {packageName}");
+                        }
                         continue;
                     }
                 }
