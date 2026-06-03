@@ -35,7 +35,9 @@ public class Program
     private static bool _listAssetTypes = false;
     private static bool _extractTextures = false;
     private static bool _dumpBlueprints = false;
+    private static bool _dumpRegistryAssets = false;
     private static string _blueprintDumpOutput = "BlueprintDump.txt";
+    private static string _registryDumpOutput = "AssetRegistryAssets.txt";
     private static string _assetRegistryPath = null;
     private static ETexturePlatform _texturePlatform = ETexturePlatform.DesktopMobile;
     private static bool _moveBlueprints = false;
@@ -44,11 +46,13 @@ public class Program
     private static bool _dryRun = false;
     private static string _assetTypesFile = null;
     private static string _blacklistAssetTypesFile = null;
+    private static string _ignorePathPrefixesFile = null;
     
     private const string AssetTypesList = "DiscoveredAssetTypes.txt";
     
     private static readonly HashSet<string> _assetTypesToCopy = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> _assetTypesToExclude = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> _ignorePathPrefixes = new(StringComparer.OrdinalIgnoreCase);
     
     private static readonly Dictionary<string, int> _copiedCounts = new();
     private static readonly object _countLock = new object();
@@ -99,6 +103,16 @@ public class Program
             {
                 Console.WriteLine("Dumping blueprint asset info...\n");
                 await DumpBlueprints();
+                Console.WriteLine("\nPress any key to exit...");
+                Console.ReadKey();
+                return;
+            }
+
+            // If in dump asset registry mode, write all asset package names and exit
+            if (_dumpRegistryAssets)
+            {
+                Console.WriteLine("Dumping all mounted file paths...\n");
+                await DumpAssetList();
                 Console.WriteLine("\nPress any key to exit...");
                 Console.ReadKey();
                 return;
@@ -266,11 +280,22 @@ public class Program
                 case "-b":
                     _dumpBlueprints = true;
                     break;
+
+                case "--dump-registry-assets":
+                case "-dra":
+                    _dumpRegistryAssets = true;
+                    break;
                 
                 case "--blueprint-output":
                 case "-bo":
                     if (i + 1 < args.Length)
                         _blueprintDumpOutput = args[++i];
+                    break;
+
+                case "--registry-output":
+                case "-ro":
+                    if (i + 1 < args.Length)
+                        _registryDumpOutput = args[++i];
                     break;
                 
                 case "--asset-registry":
@@ -312,6 +337,22 @@ public class Program
                     if (i + 1 < args.Length)
                         _blacklistAssetTypesFile = args[++i];
                     break;
+
+                case "--ignore-path-prefix":
+                case "-ipp":
+                    if (i + 1 < args.Length)
+                    {
+                        var prefix = NormalizePathPrefix(args[++i]);
+                        if (!string.IsNullOrWhiteSpace(prefix))
+                            _ignorePathPrefixes.Add(prefix);
+                    }
+                    break;
+
+                case "--ignore-path-prefixes-file":
+                case "-ippf":
+                    if (i + 1 < args.Length)
+                        _ignorePathPrefixesFile = args[++i];
+                    break;
                 
                 case "--help":
                 case "-h":
@@ -332,7 +373,7 @@ public class Program
         }
 
         // Output directory is not required when listing asset types
-        if (!_listAssetTypes && !_extractTextures && !_dumpBlueprints && !_moveBlueprints && string.IsNullOrEmpty(_projectDir))
+        if (!_listAssetTypes && !_extractTextures && !_dumpBlueprints && !_dumpRegistryAssets && !_moveBlueprints && string.IsNullOrEmpty(_projectDir))
         {
             Console.WriteLine("Error: --output is required");
             return false;
@@ -365,6 +406,16 @@ public class Program
             return false;
         }
 
+        if (!string.IsNullOrEmpty(_ignorePathPrefixesFile))
+        {
+            var ignoreFilePath = ResolveIgnorePathPrefixesFilePath();
+            if (!LoadIgnorePathPrefixesFromFile(ignoreFilePath))
+            {
+                Console.WriteLine($"Error: Could not load ignore path prefixes from {ignoreFilePath}");
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -391,7 +442,9 @@ public class Program
         Console.WriteLine("  --list-asset-types, -l    List all asset types in pak files and exit");
         Console.WriteLine("  --extract-textures, -e    Extract all textures as PNG files");
         Console.WriteLine("  --dump-blueprints, -b     Dump Blueprint/WidgetBlueprint asset info to a txt file");
+        Console.WriteLine("  --dump-registry-assets, -dra  Dump all mounted provider file paths to a txt file");
         Console.WriteLine("  --blueprint-output, -bo <path>  Output path for blueprint dump (default: BlueprintDump.txt)");
+        Console.WriteLine("  --registry-output, -ro <path>   Output path for registry dump (default: AssetRegistryAssets.txt)");
         Console.WriteLine("  --asset-registry, -ar <path>    Path to a pre-extracted AssetRegistry.bin file");
         Console.WriteLine("  --move-blueprints, -mb    Copy blueprint assets from project dir to cooked dir (no pak required)");
         Console.WriteLine("  --source, -s <path>       Source project root (e.g. F:\\Subnautica2 Modding\\Projects\\Subnautica2)");
@@ -399,6 +452,8 @@ public class Program
         Console.WriteLine("  --dry-run, -dr            Simulate --move-blueprints without copying any files");
         Console.WriteLine("  --asset-types, -at <path> Path to asset types filter file (default: AssetTypes.txt next to exe)");
         Console.WriteLine("  --blacklist-asset-types, -bat <path>  Path to blacklist asset types file");
+        Console.WriteLine("  --ignore-path-prefix, -ipp <prefix>   Ignore mounted paths that start with this prefix (repeatable)");
+        Console.WriteLine("  --ignore-path-prefixes-file, -ippf <path>  File containing prefixes to ignore, one per line");
         Console.WriteLine("  --help, -h                Show this help message");
         Console.WriteLine();
         Console.WriteLine("Use --asset-types for whitelist mode (only listed classes are copied/moved).");
@@ -430,6 +485,91 @@ public class Program
         return Path.IsPathRooted(_blacklistAssetTypesFile)
             ? _blacklistAssetTypesFile
             : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _blacklistAssetTypesFile);
+    }
+
+    private static string ResolveIgnorePathPrefixesFilePath()
+    {
+        if (string.IsNullOrEmpty(_ignorePathPrefixesFile))
+        {
+            return null;
+        }
+
+        return Path.IsPathRooted(_ignorePathPrefixesFile)
+            ? _ignorePathPrefixesFile
+            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _ignorePathPrefixesFile);
+    }
+
+    private static bool LoadIgnorePathPrefixesFromFile(string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath))
+            {
+                Console.WriteLine($"Ignore path prefixes file not found: {filePath}");
+                return false;
+            }
+
+            var lines = File.ReadAllLines(filePath);
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith("#") || trimmed.StartsWith("//"))
+                {
+                    continue;
+                }
+
+                var prefix = NormalizePathPrefix(trimmed);
+                if (!string.IsNullOrWhiteSpace(prefix))
+                {
+                    _ignorePathPrefixes.Add(prefix);
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading ignore path prefixes from file: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static string NormalizePathPrefix(string value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim().Replace('\\', '/');
+    }
+
+    private static bool ShouldIgnoreMountedPath(string path)
+    {
+        if (_ignorePathPrefixes.Count == 0)
+        {
+            return false;
+        }
+
+        var normalizedPath = NormalizePathPrefix(path);
+        foreach (var prefix in _ignorePathPrefixes)
+        {
+            if (normalizedPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (prefix.StartsWith('/') &&
+                normalizedPath.StartsWith(prefix.TrimStart('/'), StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!prefix.StartsWith('/') &&
+                normalizedPath.StartsWith('/' + prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool LoadAssetTypeFilters(bool requireFilter)
@@ -1002,6 +1142,57 @@ public class Program
                 count++;
                 if (_printSuccess) Console.WriteLine(line);
             }
+        }
+    }
+
+    private static async Task DumpAssetList()
+    {
+        var provider = new DefaultFileProvider(_pakDir, SearchOption.TopDirectoryOnly,
+            new VersionContainer(_version), StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrEmpty(_mapping))
+            provider.MappingsContainer = new FileUsmapTypeMappingsProvider(_mapping);
+
+        provider.Initialize();
+
+        if (!string.IsNullOrEmpty(_aesKey))
+            await provider.SubmitKeyAsync(new FGuid(), new FAesKey(_aesKey));
+
+        await provider.MountAsync();
+
+        if (_ignorePathPrefixes.Count > 0)
+        {
+            Console.WriteLine("Ignoring mounted path prefixes:");
+            foreach (var prefix in _ignorePathPrefixes.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  - {prefix}");
+            }
+            Console.WriteLine();
+        }
+
+        var totalMountedPaths = provider.Files.Count;
+
+        var mountedEntries = provider.Files
+            .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key))
+            .Where(kvp => !ShouldIgnoreMountedPath(kvp.Key))
+            .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var outputPath = Path.IsPathRooted(_registryDumpOutput)
+            ? _registryDumpOutput
+            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _registryDumpOutput);
+
+        using var writer = new StreamWriter(outputPath, false);
+        foreach (var entry in mountedEntries)
+        {
+            writer.WriteLine($"{entry.Key} | {entry.Value.Size}");
+        }
+
+        var ignoredCount = totalMountedPaths - mountedEntries.Count;
+        Console.WriteLine($"Wrote {mountedEntries.Count} mounted file paths to: {outputPath}");
+        if (ignoredCount > 0)
+        {
+            Console.WriteLine($"Ignored {ignoredCount} path(s) by prefix filter.");
         }
     }
 
