@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using CUE4Parse.Compression;
 using CUE4Parse.Encryption.Aes;
 using CUE4Parse.FileProvider;
 using CUE4Parse.FileProvider.Objects;
@@ -25,6 +26,7 @@ public class Program
     private static string _pakDir;
     private static string _aesKey = "";
     private static string _mapping;
+    private static string _oodlePath = null;
     private static EGame _version = EGame.GAME_UE5_6;
     private static string _projectDir;
     private static bool _replaceExisting = false;
@@ -36,9 +38,11 @@ public class Program
     private static bool _extractTextures = false;
     private static bool _dumpBlueprints = false;
     private static bool _dumpRegistryAssets = false;
+    private static bool _exportAssetRegistryBin = false;
     private static string _blueprintDumpOutput = "BlueprintDump.txt";
     private static string _registryDumpOutput = "AssetRegistryAssets.txt";
     private static string _assetRegistryPath = null;
+    private static string _assetRegistryBinOutput = "ExtractedAssetRegistry.bin";
     private static ETexturePlatform _texturePlatform = ETexturePlatform.DesktopMobile;
     private static bool _moveBlueprints = false;
     private static string _moveBlueprintsSource = null;
@@ -83,8 +87,6 @@ public class Program
                 Console.WriteLine("Scanning pak files for asset types...\n");
                 await ListAssetTypes();
                 Console.WriteLine($"\nAsset types have been written to: {AssetTypesList}");
-                Console.WriteLine("\nPress any key to exit...");
-                Console.ReadKey();
                 return;
             }
 
@@ -93,8 +95,6 @@ public class Program
             {
                 Console.WriteLine("Extracting all textures as PNG...\n");
                 await ExtractTextures();
-                Console.WriteLine("\nPress any key to exit...");
-                Console.ReadKey();
                 return;
             }
 
@@ -103,8 +103,6 @@ public class Program
             {
                 Console.WriteLine("Dumping blueprint asset info...\n");
                 await DumpBlueprints();
-                Console.WriteLine("\nPress any key to exit...");
-                Console.ReadKey();
                 return;
             }
 
@@ -113,8 +111,14 @@ public class Program
             {
                 Console.WriteLine("Dumping all mounted file paths...\n");
                 await DumpAssetList();
-                Console.WriteLine("\nPress any key to exit...");
-                Console.ReadKey();
+                return;
+            }
+
+            // If requested, export a raw AssetRegistry.bin from mounted pak files and exit
+            if (_exportAssetRegistryBin)
+            {
+                Console.WriteLine("Exporting AssetRegistry.bin from mounted pak files...\n");
+                await ExportAssetRegistryBin();
                 return;
             }
 
@@ -124,23 +128,17 @@ public class Program
                 // Load asset type filter from file (optional for -mb; if not found, all uassets are moved)
                 if (!LoadAssetTypeFilters(requireFilter: false))
                 {
-                    Console.WriteLine("\nPress any key to exit...");
-                    Console.ReadKey();
                     return;
                 }
 
-                Console.WriteLine("Moving blueprint assets from project to cooked directory...\n");
-                MoveAssets();
-                Console.WriteLine("\nPress any key to exit...");
-                Console.ReadKey();
+                Console.WriteLine("Moving filtered assets from project to cooked directory...\n");
+                await MoveAssets();
                 return;
             }
 
             // Load asset type filter from file for export mode
             if (!LoadAssetTypeFilters(requireFilter: true))
             {
-                Console.WriteLine("\nPress any key to exit...");
-                Console.ReadKey();
                 return;
             }
 
@@ -185,15 +183,11 @@ public class Program
                 }
             }
             
-            Console.WriteLine("\nPress any key to exit...");
-            Console.ReadKey();
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Fatal error: {ex.Message}");
             Console.WriteLine($"Stack trace: {ex.StackTrace}");
-            Console.WriteLine("\nPress any key to exit...");
-            Console.ReadKey();
         }
     }
 
@@ -219,6 +213,12 @@ public class Program
                 case "-m":
                     if (i + 1 < args.Length)
                         _mapping = args[++i];
+                    break;
+
+                case "--oodle":
+                case "-od":
+                    if (i + 1 < args.Length)
+                        _oodlePath = args[++i];
                     break;
                 
                 case "--aeskey":
@@ -285,6 +285,11 @@ public class Program
                 case "-dra":
                     _dumpRegistryAssets = true;
                     break;
+
+                case "--export-asset-registry-bin":
+                case "-erb":
+                    _exportAssetRegistryBin = true;
+                    break;
                 
                 case "--blueprint-output":
                 case "-bo":
@@ -302,6 +307,12 @@ public class Program
                 case "-ar":
                     if (i + 1 < args.Length)
                         _assetRegistryPath = args[++i];
+                    break;
+
+                case "--asset-registry-bin-output":
+                case "-arbo":
+                    if (i + 1 < args.Length)
+                        _assetRegistryBinOutput = args[++i];
                     break;
                 
                 case "--move-blueprints":
@@ -373,7 +384,7 @@ public class Program
         }
 
         // Output directory is not required when listing asset types
-        if (!_listAssetTypes && !_extractTextures && !_dumpBlueprints && !_dumpRegistryAssets && !_moveBlueprints && string.IsNullOrEmpty(_projectDir))
+        if (!_listAssetTypes && !_extractTextures && !_dumpBlueprints && !_dumpRegistryAssets && !_exportAssetRegistryBin && !_moveBlueprints && string.IsNullOrEmpty(_projectDir))
         {
             Console.WriteLine("Error: --output is required");
             return false;
@@ -431,6 +442,7 @@ public class Program
         Console.WriteLine();
         Console.WriteLine("Optional options:");
         Console.WriteLine("  --mapping, -m <path>      Path to .usmap mapping file");
+        Console.WriteLine("  --oodle, -od <path>       Path to Oodle DLL (optional; auto-detected when possible)");
         Console.WriteLine("  --aeskey, -k <key>        AES encryption key (if required)");
         Console.WriteLine("  --version, -v <version>   Game version (e.g., GAME_UE5_6, GAME_UE5_5)");
         Console.WriteLine("  --replace, -r             Replace existing files");
@@ -443,9 +455,11 @@ public class Program
         Console.WriteLine("  --extract-textures, -e    Extract all textures as PNG files");
         Console.WriteLine("  --dump-blueprints, -b     Dump Blueprint/WidgetBlueprint asset info to a txt file");
         Console.WriteLine("  --dump-registry-assets, -dra  Dump all mounted provider file paths to a txt file");
+        Console.WriteLine("  --export-asset-registry-bin, -erb  Export a raw AssetRegistry.bin from mounted pak files");
         Console.WriteLine("  --blueprint-output, -bo <path>  Output path for blueprint dump (default: BlueprintDump.txt)");
         Console.WriteLine("  --registry-output, -ro <path>   Output path for registry dump (default: AssetRegistryAssets.txt)");
         Console.WriteLine("  --asset-registry, -ar <path>    Path to a pre-extracted AssetRegistry.bin file");
+        Console.WriteLine("  --asset-registry-bin-output, -arbo <path>  Output path for --export-asset-registry-bin (default: ExtractedAssetRegistry.bin)");
         Console.WriteLine("  --move-blueprints, -mb    Copy blueprint assets from project dir to cooked dir (no pak required)");
         Console.WriteLine("  --source, -s <path>       Source project root (e.g. F:\\Subnautica2 Modding\\Projects\\Subnautica2)");
         Console.WriteLine("  --cooked, -c <path>       Destination cooked dir (e.g. F:\\Subnautica2 Modding\\Cooked)");
@@ -670,16 +684,218 @@ public class Program
         return _assetTypesToCopy.Count > 0 || _assetTypesToExclude.Count > 0;
     }
 
+    private static async Task<DefaultFileProvider> CreateAndMountProvider()
+    {
+        EnsureOodleInitialized();
+
+        var provider = new DefaultFileProvider(_pakDir, SearchOption.TopDirectoryOnly,
+            new VersionContainer(_version), StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrEmpty(_mapping))
+            provider.MappingsContainer = new FileUsmapTypeMappingsProvider(_mapping);
+
+        provider.Initialize();
+
+        if (!string.IsNullOrEmpty(_aesKey))
+            await provider.SubmitKeyAsync(new FGuid(), new FAesKey(_aesKey));
+
+        await provider.MountAsync();
+        return provider;
+    }
+
+    private static void EnsureOodleInitialized()
+    {
+        if (OodleHelper.Instance is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_oodlePath))
+            {
+                OodleHelper.Initialize(_oodlePath);
+            }
+            else
+            {
+                OodleHelper.Initialize();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: Oodle initialization threw an exception: {ex.Message}");
+        }
+
+        if (OodleHelper.Instance is null)
+        {
+            Console.WriteLine("Warning: Oodle was not initialized. Oodle-compressed containers may fail to read.");
+            Console.WriteLine("Hint: pass --oodle <path to oodle-data-shared.dll or oo2core_9_win64.dll>.");
+        }
+        else if (!string.IsNullOrWhiteSpace(_oodlePath))
+        {
+            Console.WriteLine($"Initialized Oodle from: {_oodlePath}");
+        }
+    }
+
+    private static Dictionary<string, string> BuildAssetClassLookup(IEnumerable<FAssetData> assets)
+    {
+        var lookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in assets)
+        {
+            var pkgName = entry.PackageName.ToString();
+            var cls = entry.AssetClass.Text;
+            if (!string.IsNullOrWhiteSpace(pkgName))
+            {
+                lookup[pkgName] = cls;
+            }
+        }
+
+        return lookup;
+    }
+
+    private static List<FAssetData> LoadAssetRegistryFromExternalPath(string registryPath)
+    {
+        List<FAssetData> assets = new();
+
+        var bytes = File.ReadAllBytes(registryPath);
+        using var archive = new FByteArchive(registryPath, bytes, new VersionContainer(_version));
+        assets.AddRange(new FAssetRegistryState(archive).PreallocatedAssetDataBuffers);
+        return assets;
+    }
+
+    private static async Task<Dictionary<string, string>> LoadAssetClassLookupForMoveFiltering()
+    {
+        if (!HasAssetTypeFilter())
+        {
+            return null;
+        }
+
+        // First preference: try mounted provider registries from --pakdir.
+        if (!string.IsNullOrEmpty(_pakDir) && Directory.Exists(_pakDir))
+        {
+            try
+            {
+                var provider = await CreateAndMountProvider();
+                var providerAssets = LoadAssetRegistry(provider, preferExternalRegistry: false);
+                if (providerAssets.Count > 0)
+                {
+                    var providerLookup = BuildAssetClassLookup(providerAssets);
+                    Console.WriteLine($"Loaded AssetRegistry from provider data: {providerLookup.Count} entries\n");
+                    return providerLookup;
+                }
+
+                Console.WriteLine("Warning: Provider registry lookup returned no entries.\n");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not load registry from provider data: {ex.Message}");
+            }
+        }
+
+        // Fallback: use an externally supplied AssetRegistry path (-ar).
+        if (!string.IsNullOrEmpty(_assetRegistryPath) && File.Exists(_assetRegistryPath))
+        {
+            try
+            {
+                Console.WriteLine($"Falling back to external AssetRegistry: {_assetRegistryPath}");
+                var externalAssets = LoadAssetRegistryFromExternalPath(_assetRegistryPath);
+                var externalLookup = BuildAssetClassLookup(externalAssets);
+                Console.WriteLine($"Loaded external AssetRegistry: {externalLookup.Count} entries\n");
+                return externalLookup;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not load external AssetRegistry for filtering: {ex.Message}");
+            }
+        }
+
+        return null;
+    }
+
+    private static async Task ExportAssetRegistryBin()
+    {
+        if (string.IsNullOrEmpty(_pakDir) || !Directory.Exists(_pakDir))
+        {
+            Console.WriteLine("Error: --export-asset-registry-bin requires a valid --pakdir path.");
+            return;
+        }
+
+        var provider = await CreateAndMountProvider();
+
+        var candidates = new List<string>
+        {
+            $"{provider.ProjectName}/AssetRegistry.bin",
+            $"{provider.ProjectName}/Content/AssetRegistry.bin",
+            "AssetRegistry.bin"
+        };
+
+        candidates.AddRange(provider.Files.Keys
+            .Where(k => k.EndsWith("AssetRegistry.bin", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase));
+
+        var uniqueCandidates = candidates
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var candidate in uniqueCandidates)
+        {
+            if (!provider.TryGetGameFile(candidate, out var registryFile))
+            {
+                continue;
+            }
+
+            try
+            {
+                var bytes = registryFile.Read();
+                if (bytes == null || bytes.Length == 0)
+                {
+                    continue;
+                }
+
+                // Validate that it is parseable before exporting.
+                using (var archive = new FByteArchive(candidate, bytes, provider.Versions))
+                {
+                    var state = new FAssetRegistryState(archive);
+                    if (state.PreallocatedAssetDataBuffers.Length == 0)
+                    {
+                        continue;
+                    }
+                }
+
+                var outputPath = Path.IsPathRooted(_assetRegistryBinOutput)
+                    ? _assetRegistryBinOutput
+                    : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _assetRegistryBinOutput);
+
+                var outputDir = Path.GetDirectoryName(outputPath);
+                if (!string.IsNullOrEmpty(outputDir))
+                {
+                    Directory.CreateDirectory(outputDir);
+                }
+
+                File.WriteAllBytes(outputPath, bytes);
+                Console.WriteLine($"Exported AssetRegistry.bin from '{candidate}' to: {outputPath}");
+                return;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Failed candidate '{candidate}': {ex.Message}");
+            }
+        }
+
+        Console.WriteLine("Error: Could not locate a valid AssetRegistry.bin in mounted pak files.");
+    }
+
     /// <summary>
     /// Attempts to load the AssetRegistry from the provider by trying multiple common paths.
     /// Falls back to building a minimal asset list from provider.Files when the registry is empty or missing.
     /// </summary>
-    private static List<FAssetData> LoadAssetRegistry(DefaultFileProvider provider)
+    private static List<FAssetData> LoadAssetRegistry(DefaultFileProvider provider, bool preferExternalRegistry = true)
     {
         List<FAssetData> assets = new();
 
         // If an external AssetRegistry.bin was provided, use it directly
-        if (!string.IsNullOrEmpty(_assetRegistryPath))
+        if (preferExternalRegistry && !string.IsNullOrEmpty(_assetRegistryPath))
         {
             if (File.Exists(_assetRegistryPath))
             {
@@ -701,61 +917,23 @@ public class Program
                 Console.WriteLine($"Warning: External AssetRegistry not found: {_assetRegistryPath}");
             }
         }
-
-        // Try common AssetRegistry paths
-        var candidates = new[]
+        
+        var registryFileName = $"{provider.ProjectName}/AssetRegistry.bin";
+        if (provider.TryGetGameFile($"{provider.ProjectName}/AssetRegistry.bin", out var registryFile))
         {
-            $"{provider.ProjectName}/AssetRegistry.bin",
-            $"{provider.ProjectName}/Content/AssetRegistry.bin",
-            "AssetRegistry.bin",
-        };
-
-        foreach (var candidate in candidates)
-        {
-            if (provider.TryGetGameFile(candidate, out var registryFile))
+            try
             {
-                try
+                var bytes = registryFile.Read();
+                using var archive = new FByteArchive(registryFileName, bytes, provider.Versions);
+                assets.AddRange(new FAssetRegistryState(archive).PreallocatedAssetDataBuffers);
+                if (assets.Count > 0)
                 {
-                    var bytes = registryFile.Read();
-                    using var archive = new FByteArchive(candidate, bytes, provider.Versions);
-                    assets.AddRange(new FAssetRegistryState(archive).PreallocatedAssetDataBuffers);
-                    if (assets.Count > 0)
-                    {
-                        Console.WriteLine($"Loaded AssetRegistry from: {candidate} ({assets.Count} entries)");
-                        break;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Warning: Failed to read registry at {candidate}: {ex.Message}");
+                    Console.WriteLine($"Loaded AssetRegistry from: {registryFileName} ({assets.Count} entries)");
                 }
             }
-        }
-
-        // If still nothing, check for plugin asset registries (IoStore games often have per-plugin registries)
-        if (assets.Count == 0)
-        {
-            var pluginRegistries = provider.Files.Keys
-                .Where(k => k.EndsWith("AssetRegistry.bin", StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            foreach (var regPath in pluginRegistries)
+            catch (Exception ex)
             {
-                if (provider.TryGetGameFile(regPath, out var registryFile))
-                {
-                    try
-                    {
-                        var bytes = registryFile.Read();
-                        using var archive = new FByteArchive(regPath, bytes, provider.Versions);
-                        var entries = new FAssetRegistryState(archive).PreallocatedAssetDataBuffers;
-                        assets.AddRange(entries);
-                        Console.WriteLine($"Loaded plugin AssetRegistry: {regPath} ({entries.Length} entries)");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Warning: Failed to read registry at {regPath}: {ex.Message}");
-                    }
-                }
+                Console.WriteLine($"Warning: Failed to read registry at {registryFileName}: {ex.Message}");
             }
         }
 
@@ -1514,9 +1692,8 @@ public class Program
     /// <summary>
     /// Copies files from the source project directory (Content and Plugins/*/Content) whose .uasset
     /// asset class matches the filters, into the cooked output directory preserving structure.
-    /// Uses the AssetRegistry (--asset-registry / -ar) to determine asset class when filtering.
     /// </summary>
-    private static void MoveAssets()
+    private static async Task MoveAssets()
     {
         var source = _moveBlueprintsSource;
         var cooked = _moveBlueprintsCooked;
@@ -1533,35 +1710,12 @@ public class Program
 
         if (HasAssetTypeFilter())
         {
-            if (!string.IsNullOrEmpty(_assetRegistryPath) && File.Exists(_assetRegistryPath))
+            arClassByPackage = await LoadAssetClassLookupForMoveFiltering();
+            if (arClassByPackage == null)
             {
-                try
-                {
-                    Console.WriteLine($"Loading AssetRegistry for filtering: {_assetRegistryPath}");
-                    var bytes = File.ReadAllBytes(_assetRegistryPath);
-                    // FByteArchive needs a VersionContainer - use a minimal one
-                    using var archive = new FByteArchive(_assetRegistryPath, bytes, new VersionContainer(_version));
-                    var arState = new FAssetRegistryState(archive);
-                    arClassByPackage = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var entry in arState.PreallocatedAssetDataBuffers)
-                    {
-                        var pkgName = entry.PackageName.ToString(); // e.g. /Game/Assets/Foo/Bar
-                        var cls = entry.AssetClass.Text;
-                        arClassByPackage[pkgName] = cls;
-                    }
-                    Console.WriteLine($"AssetRegistry loaded: {arClassByPackage.Count} entries\n");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Warning: Could not load AssetRegistry for filtering: {ex.Message}");
-                    Console.WriteLine("Proceeding without asset type filtering - all .uasset files will be moved.\n");
-                }
-            }
-            else
-            {
-                Console.WriteLine("Warning: Asset type filtering is set but no --asset-registry (-ar) was provided.");
-                Console.WriteLine("Cannot determine asset class without the AssetRegistry.");
-                Console.WriteLine("Proceeding without filtering - all .uasset files will be moved.\n");
+                Console.WriteLine("Warning: Asset type filtering is set but no usable AssetRegistry was found.");
+                Console.WriteLine("Tried provider registry first (from --pakdir), then external --asset-registry (-ar).");
+                return;
             }
         }
 
