@@ -499,14 +499,15 @@ public class GraphGenerator
     {
         Console.WriteLine($"\nExporting index to: {outputPath}");
         
-        var dataTables = _tableData
-            .Where(kvp => !_dataAssets.Contains(kvp.Key))
-            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-        
-        var dataAssets = _tableData
-            .Where(kvp => _dataAssets.Contains(kvp.Key))
-            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-        
+        var dataTables = new SortedDictionary<string, object>(StringComparer.Ordinal);
+        var dataAssets = new SortedDictionary<string, object>(StringComparer.Ordinal);
+
+        foreach (var kvp in _tableData)
+        {
+            var target = _dataAssets.Contains(kvp.Key) ? dataAssets : dataTables;
+            target[kvp.Key] = SortTableForExport(kvp.Value);
+        }
+
         var exportData = new
         {
             ExportDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
@@ -538,6 +539,49 @@ public class GraphGenerator
         }
     }
     
+    /// <summary>
+    /// Produce an alphabetically ordered copy of a table's rows (keyed by row key),
+    /// with each row's contents recursively sorted.
+    /// </summary>
+    private static SortedDictionary<string, object> SortTableForExport(Dictionary<string, Dictionary<string, object>> rows)
+    {
+        var sorted = new SortedDictionary<string, object>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            sorted[row.Key] = SortForExport(row.Value);
+        }
+        return sorted;
+    }
+
+    /// <summary>
+    /// Recursively sort dictionaries by key for stable, diff-friendly output.
+    /// Lists keep their original order because array/set indices are meaningful.
+    /// </summary>
+    private static object? SortForExport(object? value)
+    {
+        switch (value)
+        {
+            case Dictionary<string, object> dict:
+                var sorted = new SortedDictionary<string, object?>(StringComparer.Ordinal);
+                foreach (var kvp in dict)
+                {
+                    sorted[kvp.Key] = SortForExport(kvp.Value);
+                }
+                return sorted;
+
+            case List<object> list:
+                var newList = new List<object?>(list.Count);
+                foreach (var item in list)
+                {
+                    newList.Add(SortForExport(item));
+                }
+                return newList;
+
+            default:
+                return value;
+        }
+    }
+
     /// <summary>
     /// Interactive search mode
     /// </summary>
