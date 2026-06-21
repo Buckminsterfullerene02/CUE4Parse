@@ -15,10 +15,12 @@ using CUE4Parse.UE4.AssetRegistry.Objects;
 using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Texture;
+using CUE4Parse.UE4.Localization;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Readers;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse_Conversion.Textures;
+using Newtonsoft.Json;
 
 public class Program
 {
@@ -39,6 +41,9 @@ public class Program
     private static bool _dumpBlueprints = false;
     private static bool _dumpRegistryAssets = false;
     private static bool _exportAssetRegistryBin = false;
+    private static bool _dumpLoc = false;
+    private static string _dumpLocPath = null;
+    private static string _dumpLocOutput = null;
     private static string _blueprintDumpOutput = "BlueprintDump.txt";
     private static string _registryDumpOutput = "AssetRegistryAssets.txt";
     private static string _assetRegistryPath = null;
@@ -111,6 +116,14 @@ public class Program
             {
                 Console.WriteLine("Dumping all mounted file paths...\n");
                 await DumpAssetList();
+                return;
+            }
+
+            // If in dump-loc mode, dump a .locres file's contents to JSON and exit
+            if (_dumpLoc)
+            {
+                Console.WriteLine($"Dumping localization resource '{_dumpLocPath}'...\n");
+                await DumpLoc();
                 return;
             }
 
@@ -290,6 +303,15 @@ public class Program
                 case "-erb":
                     _exportAssetRegistryBin = true;
                     break;
+
+                case "--dump-loc":
+                case "-dl":
+                    _dumpLoc = true;
+                    if (i + 1 < args.Length)
+                        _dumpLocPath = args[++i];
+                    if (i + 1 < args.Length)
+                        _dumpLocOutput = args[++i];
+                    break;
                 
                 case "--blueprint-output":
                 case "-bo":
@@ -384,10 +406,25 @@ public class Program
         }
 
         // Output directory is not required when listing asset types
-        if (!_listAssetTypes && !_extractTextures && !_dumpBlueprints && !_dumpRegistryAssets && !_exportAssetRegistryBin && !_moveBlueprints && string.IsNullOrEmpty(_projectDir))
+        if (!_listAssetTypes && !_extractTextures && !_dumpBlueprints && !_dumpRegistryAssets && !_exportAssetRegistryBin && !_dumpLoc && !_moveBlueprints && string.IsNullOrEmpty(_projectDir))
         {
             Console.WriteLine("Error: --output is required");
             return false;
+        }
+
+        // dump-loc requires both the locres path and the output json path
+        if (_dumpLoc)
+        {
+            if (string.IsNullOrEmpty(_dumpLocPath))
+            {
+                Console.WriteLine("Error: --dump-loc requires <locres path> <out path>");
+                return false;
+            }
+            if (string.IsNullOrEmpty(_dumpLocOutput))
+            {
+                Console.WriteLine("Error: --dump-loc requires an output path: --dump-loc <locres path> <out path>");
+                return false;
+            }
         }
 
         // move-blueprints requires --source and --cooked (--pakdir not required)
@@ -456,6 +493,7 @@ public class Program
         Console.WriteLine("  --dump-blueprints, -b     Dump Blueprint/WidgetBlueprint asset info to a txt file");
         Console.WriteLine("  --dump-registry-assets, -dra  Dump all mounted provider file paths to a txt file");
         Console.WriteLine("  --export-asset-registry-bin, -erb  Export a raw AssetRegistry.bin from mounted pak files");
+        Console.WriteLine("  --dump-loc, -dl <locres path> <out path>  Dump a .locres file's values to a JSON file");
         Console.WriteLine("  --blueprint-output, -bo <path>  Output path for blueprint dump (default: BlueprintDump.txt)");
         Console.WriteLine("  --registry-output, -ro <path>   Output path for registry dump (default: AssetRegistryAssets.txt)");
         Console.WriteLine("  --asset-registry, -ar <path>    Path to a pre-extracted AssetRegistry.bin file");
@@ -679,6 +717,51 @@ public class Program
         return true;
     }
 
+    // Like AssetTypePassesFilter but also checks nativeParentModule for BlueprintGeneratedClass assets.
+    // Whitelist: include if direct class OR native parent module matches.
+    // Blacklist: exclude if direct class OR native parent module matches.
+    private static bool AssetTypePassesFilterWithParent(string assetClass, string nativeParentModule)
+    {
+        if (_assetTypesToCopy.Count > 0)
+        {
+            if (!string.IsNullOrEmpty(assetClass) && _assetTypesToCopy.Contains(assetClass)) return true;
+            if (!string.IsNullOrEmpty(nativeParentModule) && _assetTypesToCopy.Contains(nativeParentModule)) return true;
+            return false;
+        }
+
+        if (_assetTypesToExclude.Count > 0)
+        {
+            if (!string.IsNullOrEmpty(assetClass) && _assetTypesToExclude.Contains(assetClass)) return false;
+            if (!string.IsNullOrEmpty(nativeParentModule) && _assetTypesToExclude.Contains(nativeParentModule)) return false;
+            return true;
+        }
+
+        return true;
+    }
+
+    // Extracts the UE module name from a NativeParentClass tag value.
+    // "/Script/LevelSequence.LevelSequenceDirector" -> "LevelSequence"
+    // "Class'/Script/Engine.Actor'"                 -> "Engine"
+    private static string ExtractNativeParentModule(string nativeParentClassTag)
+    {
+        if (string.IsNullOrEmpty(nativeParentClassTag)) return null;
+
+        var path = nativeParentClassTag;
+
+        // Strip outer class reference format: "Class'/Script/Foo.Bar'" -> "/Script/Foo.Bar"
+        var quoteIdx = path.IndexOf('\'');
+        if (quoteIdx >= 0)
+            path = path.Substring(quoteIdx + 1).TrimEnd('\'');
+
+        const string prefix = "/Script/";
+        if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var rest = path.Substring(prefix.Length);
+        var dotIdx = rest.IndexOf('.');
+        return dotIdx > 0 ? rest.Substring(0, dotIdx) : rest;
+    }
+
     private static bool HasAssetTypeFilter()
     {
         return _assetTypesToCopy.Count > 0 || _assetTypesToExclude.Count > 0;
@@ -737,20 +820,37 @@ public class Program
         }
     }
 
-    private static Dictionary<string, string> BuildAssetClassLookup(IEnumerable<FAssetData> assets)
+    private static (Dictionary<string, string> Classes, Dictionary<string, string> NativeParentModules) BuildAssetClassLookup(IEnumerable<FAssetData> assets)
     {
-        var lookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var classes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var nativeParentModules = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var entry in assets)
         {
             var pkgName = entry.PackageName.ToString();
+            if (string.IsNullOrWhiteSpace(pkgName)) continue;
+
             var cls = entry.AssetClass.Text;
-            if (!string.IsNullOrWhiteSpace(pkgName))
+            classes[pkgName] = cls;
+
+            // For BlueprintGeneratedClass assets, also extract the native parent module so that
+            // filtering by e.g. "LevelSequence" also catches director BPs whose NativeParentClass
+            // is /Script/LevelSequence.LevelSequenceDirector.
+            if (cls.Equals("BlueprintGeneratedClass", StringComparison.OrdinalIgnoreCase) &&
+                entry.TagsAndValues != null)
             {
-                lookup[pkgName] = cls;
+                var npcKey = entry.TagsAndValues.Keys
+                    .FirstOrDefault(k => k.Text.Equals("NativeParentClass", StringComparison.OrdinalIgnoreCase));
+                if (npcKey != null)
+                {
+                    var module = ExtractNativeParentModule(entry.TagsAndValues[npcKey]);
+                    if (!string.IsNullOrEmpty(module))
+                        nativeParentModules[pkgName] = module;
+                }
             }
         }
 
-        return lookup;
+        return (classes, nativeParentModules);
     }
 
     private static List<FAssetData> LoadAssetRegistryFromExternalPath(string registryPath)
@@ -763,7 +863,7 @@ public class Program
         return assets;
     }
 
-    private static async Task<Dictionary<string, string>> LoadAssetClassLookupForMoveFiltering()
+    private static async Task<(Dictionary<string, string> Classes, Dictionary<string, string> NativeParentModules)?> LoadAssetClassLookupForMoveFiltering()
     {
         if (!HasAssetTypeFilter())
         {
@@ -780,7 +880,7 @@ public class Program
                 if (providerAssets.Count > 0)
                 {
                     var providerLookup = BuildAssetClassLookup(providerAssets);
-                    Console.WriteLine($"Loaded AssetRegistry from provider data: {providerLookup.Count} entries\n");
+                    Console.WriteLine($"Loaded AssetRegistry from provider data: {providerLookup.Classes.Count} entries\n");
                     return providerLookup;
                 }
 
@@ -800,7 +900,7 @@ public class Program
                 Console.WriteLine($"Falling back to external AssetRegistry: {_assetRegistryPath}");
                 var externalAssets = LoadAssetRegistryFromExternalPath(_assetRegistryPath);
                 var externalLookup = BuildAssetClassLookup(externalAssets);
-                Console.WriteLine($"Loaded external AssetRegistry: {externalLookup.Count} entries\n");
+                Console.WriteLine($"Loaded external AssetRegistry: {externalLookup.Classes.Count} entries\n");
                 return externalLookup;
             }
             catch (Exception ex)
@@ -884,6 +984,46 @@ public class Program
         }
 
         Console.WriteLine("Error: Could not locate a valid AssetRegistry.bin in mounted pak files.");
+    }
+
+    private static async Task DumpLoc()
+    {
+        var provider = await CreateAndMountProvider();
+
+        // .locres files always live in the .pak side of a package, regardless of IoStore usage.
+        if (!provider.TryGetGameFile(_dumpLocPath, out var locResFile))
+        {
+            Console.WriteLine($"Error: Could not find locres file in mounted paks: {_dumpLocPath}");
+            return;
+        }
+
+        FTextLocalizationResource locRes;
+        try
+        {
+            using var archive = locResFile.CreateReader();
+            locRes = new FTextLocalizationResource(archive);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error: Failed to parse locres '{_dumpLocPath}': {ex.Message}");
+            return;
+        }
+
+        var outputPath = Path.IsPathRooted(_dumpLocOutput)
+            ? _dumpLocOutput
+            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _dumpLocOutput);
+
+        var outputDir = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(outputDir))
+        {
+            Directory.CreateDirectory(outputDir);
+        }
+
+        var json = JsonConvert.SerializeObject(locRes, Formatting.Indented);
+        File.WriteAllText(outputPath, json);
+
+        var entryCount = locRes.Entries.Sum(ns => ns.Value.Count);
+        Console.WriteLine($"Dumped {locRes.Entries.Count} namespace(s), {entryCount} entr(ies) to: {outputPath}");
     }
 
     /// <summary>
@@ -1705,18 +1845,20 @@ public class Program
         }
 
         // Build asset class lookup from the AssetRegistry if a filter is active
-        // Key: package name lower-case (e.g. "/game/assets/foo/bar"), Value: asset class text
+        // Key: package name (e.g. "/Game/Assets/Foo/Bar"), Value: asset class text / native parent module
         Dictionary<string, string> arClassByPackage = null;
+        Dictionary<string, string> arNativeParentByPackage = null;
 
         if (HasAssetTypeFilter())
         {
-            arClassByPackage = await LoadAssetClassLookupForMoveFiltering();
-            if (arClassByPackage == null)
+            var lookupResult = await LoadAssetClassLookupForMoveFiltering();
+            if (lookupResult == null)
             {
                 Console.WriteLine("Warning: Asset type filtering is set but no usable AssetRegistry was found.");
                 Console.WriteLine("Tried provider registry first (from --pakdir), then external --asset-registry (-ar).");
                 return;
             }
+            (arClassByPackage, arNativeParentByPackage) = lookupResult.Value;
         }
 
         // Collect scan roots: Content and Plugins/*/Content
@@ -1789,15 +1931,20 @@ public class Program
                     }
 
                     arClassByPackage.TryGetValue(packageName, out var assetClass);
-                    if (!AssetTypePassesFilter(assetClass))
+                    string nativeParentModule = null;
+                    arNativeParentByPackage?.TryGetValue(packageName, out nativeParentModule);
+                    if (!AssetTypePassesFilterWithParent(assetClass, nativeParentModule))
                     {
                         skipped++;
                         if (_printSkipped)
                         {
+                            var effectiveClass = nativeParentModule != null
+                                ? $"{assetClass ?? "unknown"}[NativeParent={nativeParentModule}]"
+                                : assetClass ?? "unknown";
                             if (_assetTypesToCopy.Count > 0)
-                                Console.WriteLine($"[SKIP] Not in whitelist (class={assetClass ?? "unknown"}): {packageName}");
+                                Console.WriteLine($"[SKIP] Not in whitelist (class={effectiveClass}): {packageName}");
                             else
-                                Console.WriteLine($"[SKIP] Matched blacklist (class={assetClass ?? "unknown"}): {packageName}");
+                                Console.WriteLine($"[SKIP] Matched blacklist (class={effectiveClass}): {packageName}");
                         }
                         continue;
                     }
@@ -1809,13 +1956,13 @@ public class Program
                 {
                     skipped++;
                     if (_printSkipped)
-                        Console.WriteLine($"[SKIP] Already exists: {relBase}/{relPath}");
+                        Console.WriteLine($"[SKIP] Already exists: {relBase}\\{relPath}");
                     continue;
                 }
 
                 if (_dryRun)
                 {
-                    Console.WriteLine($"[DRY RUN] Would move: {relBase}/{relPath}");
+                    Console.WriteLine($"[DRY RUN] Would move: {relBase}\\{relPath} to {targetPath}");
                     moved++;
                     continue;
                 }
@@ -1838,7 +1985,7 @@ public class Program
 
                 moved++;
                 if (_printSuccess)
-                    Console.WriteLine($"[MOVE] {relBase}/{relPath}");
+                    Console.WriteLine($"[MOVE] {relBase}\\{relPath} to {targetPath}");
             }
             catch (Exception ex)
             {
