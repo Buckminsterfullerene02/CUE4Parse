@@ -6,10 +6,12 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using CUE4Parse_Conversion;
+using CUE4Parse_Conversion.Options;
 using CUE4Parse.Encryption.Aes;
 using CUE4Parse.FileProvider;
 using CUE4Parse.FileProvider.Objects;
 using CUE4Parse.MappingsProvider;
+using CUE4Parse.MappingsProvider.Usmap;
 using CUE4Parse.UE4.AssetRegistry;
 using CUE4Parse.UE4.AssetRegistry.Objects;
 using CUE4Parse.UE4.Assets;
@@ -250,9 +252,9 @@ public class Program
             var outputPath = Path.Join(_outputDir, outFolder);
             EnsureDirectoryExists(outputPath);
             
-            var options = new ExporterOptions { ExportMaterials = _exportMaterials };
-            var exporter = new Exporter(asset, options);
-            exporter.TryWriteToDir(new DirectoryInfo(outputPath), out _, out var fileName);
+            var options = new ExportOptions(exportMaterials: _exportMaterials);
+            var results = new ExportSession().Add(asset).RunAsync(outputPath, options).GetAwaiter().GetResult();
+            var fileName = results.FirstOrDefault()?.DiskFilePaths?.FirstOrDefault() ?? string.Empty;
 
             if (_generateJson)
             {
@@ -354,9 +356,9 @@ public class Program
         
         try
         {
-            var options = new ExporterOptions { ExportMaterials = _exportMaterials };
-            var exporter = new Exporter(refObject!, options);
-            exporter.TryWriteToDir(new DirectoryInfo(Path.Join(_outputDir, outFolder)), out _, out var fileName);
+            var options = new ExportOptions(exportMaterials: _exportMaterials);
+            var results = new ExportSession().Add(refObject!).RunAsync(Path.Join(_outputDir, outFolder), options).GetAwaiter().GetResult();
+            var fileName = results.FirstOrDefault()?.DiskFilePaths?.FirstOrDefault() ?? string.Empty;
             if (_printSuccess) 
             {
                 lock (Console.Out)

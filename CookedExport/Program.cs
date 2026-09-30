@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using CUE4Parse_Conversion.Options;
 using CUE4Parse.Compression;
 using CUE4Parse.Encryption.Aes;
 using CUE4Parse.FileProvider;
@@ -20,6 +21,7 @@ using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Readers;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse_Conversion.Textures;
+using CUE4Parse.MappingsProvider.Usmap;
 using Newtonsoft.Json;
 
 public class Program
