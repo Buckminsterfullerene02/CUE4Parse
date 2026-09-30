@@ -1,16 +1,15 @@
-using System;
 using CUE4Parse.UE4.AssetRegistry.Objects;
 using CUE4Parse.UE4.AssetRegistry.Readers;
 using CUE4Parse.UE4.Readers;
 using CUE4Parse.UE4.Versions;
 using Newtonsoft.Json;
-using Serilog;
 
 namespace CUE4Parse.UE4.AssetRegistry;
 
 [JsonConverter(typeof(FAssetRegistryStateConverter))]
 public class FAssetRegistryState
 {
+    
     public FAssetData[] PreallocatedAssetDataBuffers;
     public FDependsNode[] PreallocatedDependsNodeDataBuffers;
     public FAssetPackageData[] PreallocatedPackageDataBuffers;
@@ -28,7 +27,7 @@ public class FAssetRegistryState
         var version = header.Version;
         switch (version)
         {
-            case < FAssetRegistryVersionType.AddAssetRegistryState:
+            case < FAssetRegistryVersionType.HardSoftDependencies:
                 Log.Warning("Cannot read registry state before {Version}", version);
                 break;
             case < FAssetRegistryVersionType.FixedTags:
@@ -50,9 +49,6 @@ public class FAssetRegistryState
     private void Load(FAssetRegistryArchive Ar)
     {
         PreallocatedAssetDataBuffers = Ar.ReadArray(() => new FAssetData(Ar));
-
-        if (Ar.Header.Version < FAssetRegistryVersionType.RemovedMD5Hash)
-            return; // Just ignore the rest of this for now.
 
         if (Ar.Header.Version < FAssetRegistryVersionType.AddedDependencyFlags)
         {

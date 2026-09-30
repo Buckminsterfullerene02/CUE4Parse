@@ -1,9 +1,7 @@
-using System;
-using System.IO;
 using System.Text;
-using static CUE4Parse.UE4.CriWare.Decoders.HCA.Constants;
+using static CUE4Parse.UE4.Criware.Decoders.HCA.Constants;
 
-namespace CUE4Parse.UE4.CriWare.Decoders.HCA;
+namespace CUE4Parse.UE4.Criware.Decoders.HCA;
 
 internal class HcaContext
 {
@@ -173,7 +171,7 @@ internal class HcaContext
 
             for (int i = 0; i < CommentLength; i++)
             {
-                commentStringBuilder.Append(bitReader.Read(8));
+                commentStringBuilder.Append((char) bitReader.Read(8));
             }
 
             Comment = commentStringBuilder.ToString();

@@ -1,4 +1,3 @@
-using System;
 using CUE4Parse.UE4.VirtualFileSystem;
 
 namespace CUE4Parse.GameTypes.SD.Encryption.Aes;
@@ -687,7 +686,7 @@ public static class SpectreDivideAes
         a4[14] = (byte)(v77 >> 8);
     }
 
-    public static byte[] SpectreDecrypt(byte[] bytes, int beginOffset, int count, bool isIndex, IAesVfsReader reader)
+    public static byte[] SpectreDecrypt(byte[] bytes, int beginOffset, int count, bool isIndex, IAesVfsReader reader, object? customData = null)
     {
         if (bytes.Length < beginOffset + count)
             throw new IndexOutOfRangeException("beginOffset + count is larger than the length of bytes");

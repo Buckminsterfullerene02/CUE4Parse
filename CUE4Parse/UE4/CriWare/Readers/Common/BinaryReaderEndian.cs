@@ -1,8 +1,6 @@
-using System;
 using System.Buffers.Binary;
-using System.IO;
 
-namespace CUE4Parse.UE4.CriWare.Readers.Common;
+namespace CUE4Parse.UE4.Criware.Readers.Common;
 
 public class BinaryReaderEndian(Stream input) : BinaryReader(input)
 {

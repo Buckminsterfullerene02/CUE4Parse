@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Assets.Utils;
@@ -17,12 +16,7 @@ public readonly struct FWwiseLocalizedAuxBusCookedData
 
     public FWwiseLocalizedAuxBusCookedData(FStructFallback fallback)
     {
-        AuxBusLanguageMap = new Dictionary<FWwiseLanguageCookedData, FWwiseAuxBusCookedData?>();
-        foreach (var kv in fallback.GetOrDefault<UScriptMap>(nameof(AuxBusLanguageMap)).Properties)
-        {
-            AuxBusLanguageMap[kv.Key.GetValue<FWwiseLanguageCookedData>()] = kv.Value?.GetValue<FWwiseAuxBusCookedData>();
-        }
-
+        AuxBusLanguageMap = fallback.GetOrDefault<Dictionary<FWwiseLanguageCookedData, FWwiseAuxBusCookedData?>>(nameof(AuxBusLanguageMap), []);
         DebugName = fallback.GetOrDefault<FName>(nameof(DebugName));
         AuxBusId = fallback.GetOrDefault<int>(nameof(AuxBusId));
     }

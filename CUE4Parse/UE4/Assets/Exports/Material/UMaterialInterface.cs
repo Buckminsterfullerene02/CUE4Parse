@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Assets.Readers;
@@ -15,15 +13,13 @@ namespace CUE4Parse.UE4.Assets.Exports.Material;
 [SkipObjectRegistration]
 public class UMaterialInterface : UUnrealMaterial
 {
-    //I think those aren't used in UE4 but who knows
-    //to delete
     public bool bUseMobileSpecular;
     public float MobileSpecularPower = 16.0f;
     public EMobileSpecularMask MobileSpecularMask = EMobileSpecularMask.MSM_Constant;
-    public UTexture? FlattenedTexture;
-    public UTexture? MobileBaseTexture;
-    public UTexture? MobileNormalTexture;
-    public UTexture? MobileMaskTexture;
+    public FPackageIndex? FlattenedTexture;
+    public FPackageIndex? MobileBaseTexture;
+    public FPackageIndex? MobileNormalTexture;
+    public FPackageIndex? MobileMaskTexture;
 
     public FStructFallback? CachedExpressionData;
     public FMaterialTextureInfo[] TextureStreamingData = Array.Empty<FMaterialTextureInfo>();
@@ -31,15 +27,15 @@ public class UMaterialInterface : UUnrealMaterial
 
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
-        if(Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 24;
+        if(Ar.Game == GAME_WorldofJadeDynasty) Ar.Position += 24;
         base.Deserialize(Ar, validPos);
         bUseMobileSpecular = GetOrDefault<bool>(nameof(bUseMobileSpecular));
         MobileSpecularPower = GetOrDefault<float>(nameof(MobileSpecularPower));
         MobileSpecularMask = GetOrDefault<EMobileSpecularMask>(nameof(MobileSpecularMask));
-        FlattenedTexture = GetOrDefault<UTexture>(nameof(FlattenedTexture));
-        MobileBaseTexture = GetOrDefault<UTexture>(nameof(MobileBaseTexture));
-        MobileNormalTexture = GetOrDefault<UTexture>(nameof(MobileNormalTexture));
-        MobileMaskTexture = GetOrDefault<UTexture>(nameof(MobileMaskTexture));
+        FlattenedTexture = GetOrDefault<FPackageIndex?>(nameof(FlattenedTexture));
+        MobileBaseTexture = GetOrDefault<FPackageIndex?>(nameof(MobileBaseTexture));
+        MobileNormalTexture = GetOrDefault<FPackageIndex?>(nameof(MobileNormalTexture));
+        MobileMaskTexture = GetOrDefault<FPackageIndex?>(nameof(MobileMaskTexture));
         TextureStreamingData = GetOrDefault(nameof(TextureStreamingData), Array.Empty<FMaterialTextureInfo>());
 
         var bSavedCachedExpressionData = FUE5ReleaseStreamObjectVersion.Get(Ar) >= FUE5ReleaseStreamObjectVersion.Type.MaterialInterfaceSavedCachedData && Ar.ReadBoolean();
@@ -48,7 +44,7 @@ public class UMaterialInterface : UUnrealMaterial
             CachedExpressionData = new FStructFallback(Ar, "MaterialCachedExpressionData");
         }
 
-        if (Ar.Game == EGame.GAME_HogwartsLegacy) CustomGameData = new FSHAHash(Ar);
+        if (Ar.Game == GAME_HogwartsLegacy) CustomGameData = new FSHAHash(Ar);
     }
 
     protected internal override void WriteJson(JsonWriter writer, JsonSerializer serializer)
@@ -80,12 +76,19 @@ public class UMaterialInterface : UUnrealMaterial
         parameters.MobileSpecularMask = MobileSpecularMask;
     }
 
-    public override void GetParams(CMaterialParams2 parameters, EMaterialFormat format)
+    public override void GetParams(CMaterialParams2 parameters, EMaterialDepth depth)
     {
+        if (FlattenedTexture != null)
+            parameters.VerifyTexture("Diffuse", FlattenedTexture, false);
+        if (MobileBaseTexture != null)
+            parameters.VerifyTexture("Diffuse", MobileBaseTexture, false);
+        if (MobileNormalTexture != null)
+            parameters.VerifyTexture("Normal", MobileNormalTexture, false);
+
         for (int i = 0; i < TextureStreamingData.Length; i++)
         {
             var name = TextureStreamingData[i].TextureName.Text;
-            if (!parameters.TryGetTexture2d(out var texture, name))
+            if (!parameters.Textures.TryGetValue(name, out var texture))
                 continue;
 
             parameters.VerifyTexture(name, texture, false);
@@ -129,10 +132,7 @@ public class UMaterialInterface : UUnrealMaterial
         {
             for (int i = 0; i < textureParameterInfos.Length; i++)
             {
-                var name = textureParameterInfos[i].Name.Text;
-                if (!textureValues[i].TryLoad(out UTexture texture)) continue;
-
-                parameters.VerifyTexture(name, texture);
+                parameters.VerifyTexture(textureParameterInfos[i].Name.Text, textureValues[i]);
             }
         }
     }
@@ -160,10 +160,7 @@ public class UMaterialInterface : UUnrealMaterial
         {
             for (int i = 0; i < textureParameterInfos.Length; i++)
             {
-                var name = textureParameterInfos[i].Name.Text;
-                if (!textureValues[i].TryLoad(out UTexture texture)) continue;
-
-                parameters.VerifyTexture(name, texture);
+                parameters.VerifyTexture(textureParameterInfos[i].Name.Text, textureValues[i]);
             }
         }
     }
@@ -174,7 +171,7 @@ public class UMaterialInterface : UUnrealMaterial
         if (numLoadedResources > 0)
         {
             FMaterialResourceProxyReader resourceAr;
-            if (Ar.Game != EGame.GAME_Stalker2)
+            if (Ar.Game != GAME_Stalker2)
             {
                 resourceAr = new FMaterialResourceProxyReader(Ar);
             }

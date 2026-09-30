@@ -1,36 +1,33 @@
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.IO;
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Threading;
-using System.Threading.Tasks;
 using CUE4Parse.Encryption.Aes;
 using CUE4Parse.FileProvider.Objects;
-using CUE4Parse.GameTypes.ABI.Encryption.Aes;
+using CUE4Parse.GameTypes.ABI.Encryption.SM4;
 using CUE4Parse.GameTypes.ApexMobile.Encryption.Aes;
-using CUE4Parse.GameTypes.ArcRaiders.Encryption.Aes;
 using CUE4Parse.GameTypes.BB3.Encryption.Aes;
+using CUE4Parse.GameTypes.ChasingKaleidoRIDER.Encryption;
 using CUE4Parse.GameTypes.DBD.Encryption.Aes;
-using CUE4Parse.GameTypes.DeltaForce.Encryption.Aes;
+using CUE4Parse.GameTypes.DFHO.Encryption.Aes;
+using CUE4Parse.GameTypes.DragonSword.Encryption.Aes;
 using CUE4Parse.GameTypes.DreamStar.Encryption.Aes;
-using CUE4Parse.GameTypes.FSR.Encryption.Aes;
-using CUE4Parse.GameTypes.FunkoFusion.Encryption.Aes;
+using CUE4Parse.GameTypes.Embark.Encryption.Aes;
 using CUE4Parse.GameTypes.INikki.Encryption.Aes;
 using CUE4Parse.GameTypes.MindsEye.Encryption.Aes;
 using CUE4Parse.GameTypes.NetEase.MAR.Encryption.Aes;
 using CUE4Parse.GameTypes.NFS.Mobile.Encryption.Aes;
 using CUE4Parse.GameTypes.NMZ.Encryption.Aes;
 using CUE4Parse.GameTypes.OPA.Encryption.Aes;
-using CUE4Parse.GameTypes.PAXDEI.Encryption.Aes;
 using CUE4Parse.GameTypes.PMA.Encryption.Aes;
-using CUE4Parse.GameTypes.RocoKingdomWorld.Encryption.Aes;
+using CUE4Parse.GameTypes.ProSpi.Encryption.Aes;
 using CUE4Parse.GameTypes.Rennsport.Encryption.Aes;
 using CUE4Parse.GameTypes.SD.Encryption.Aes;
+using CUE4Parse.GameTypes.SilverPalace.Encryption;
 using CUE4Parse.GameTypes.Snowbreak.Encryption.Aes;
-using CUE4Parse.GameTypes.Splitgate2.Encryption.Aes;
+using CUE4Parse.GameTypes.Tencent.GangstarMirageCity.Encryption;
+using CUE4Parse.GameTypes.Tencent.PUBGMobile.Encryption.Aes;
+using CUE4Parse.GameTypes.Tencent.RocoKingdomWorld.Encryption.Aes;
+using CUE4Parse.GameTypes.Tencent.ValorantSource.Encryption.Aes;
 using CUE4Parse.GameTypes.THPS.Encryption.Aes;
 using CUE4Parse.GameTypes.UDWN.Encryption.Aes;
 using CUE4Parse.GameTypes.UWO.Encryption.Aes;
@@ -66,6 +63,8 @@ namespace CUE4Parse.FileProvider.Vfs
 
         public IReadOnlyDictionary<FPackageId, GameFile> FilesById => Files.ById;
 
+        public int LooseFileCount { get; protected set; }
+
         public IAesVfsReader.CustomEncryptionDelegate? CustomEncryption { get; set; }
         public event EventHandler<int>? VfsRegistered;
         public event EventHandler<int>? VfsMounted;
@@ -75,39 +74,45 @@ namespace CUE4Parse.FileProvider.Vfs
         {
             CustomEncryption = versions?.Game switch
             {
-                EGame.GAME_ApexLegendsMobile => ApexLegendsMobileAes.DecryptApexMobile,
-                EGame.GAME_Snowbreak => SnowbreakAes.SnowbreakDecrypt,
-                EGame.GAME_MarvelRivals => MarvelAes.MarvelDecrypt,
-                EGame.GAME_Undawn => ToaaAes.ToaaDecrypt,
-                EGame.GAME_DeadByDaylight or EGame.GAME_DeadByDaylight_Old => DBDAes.DbDDecrypt,
-                EGame.GAME_PaxDei => PaxDeiAes.PaxDeiDecrypt,
-                EGame.GAME_3on3FreeStyleRebound => FreeStyleReboundAes.FSRDecrypt,
-                EGame.GAME_DreamStar => DreamStarAes.DreamStarDecrypt,
-                EGame.GAME_DeltaForce => DeltaForceAes.DeltaForceDecrypt,
-                EGame.GAME_PromiseMascotAgency => PMAAes.PMADecrypt,
-                EGame.GAME_Rennsport => RennsportAes.RennsportDecrypt,
-                EGame.GAME_FunkoFusion => FunkoFusionAes.FunkoFusionDecrypt,
-                EGame.GAME_TonyHawkProSkater12 or EGame.GAME_TonyHawkProSkater34 => THPS12Aes.THPS12Decrypt,
-                EGame.GAME_InfinityNikki => InfinityNikkiAes.InfinityNikkiDecrypt,
-                EGame.GAME_Spectre => SpectreDivideAes.SpectreDecrypt,
-                EGame.GAME_Splitgate2 => Splitgate2Aes.Splitgate2Decrypt,
-                EGame.GAME_MindsEye => MindsEyeAes.MindsEyeDecrypt,
-                EGame.GAME_NeedForSpeedMobile => NFSMobileAes.NFSMobileDecrypt,
-                EGame.GAME_OnePieceAmbition => OnePieceAmbitionEncryption.OnePieceAmbitionDecrypt,
-                EGame.GAME_UnchartedWatersOrigin => UnchartedWatersOriginAes.UnchartedWatersOriginDecrypt,
-                EGame.GAME_ArenaBreakoutInfinite => ABIDecryption.ABIDecrypt,
-                EGame.GAME_BloodBowl3 => BloodBowl3Aes.BloodBowl3Decrypt,
-                EGame.GAME_AssaultFireFuture => AssaultFireFutureAes.AssaultFireFutureDecrypt,
-                EGame.GAME_ArcRaiders => ArcRaidersAes.ArcRaidersDecrypt,
-                EGame.GAME_RocoKingdomWorld => RocoKingdomWorldAes.RocoKingdomWorldDecrypt,
+                GAME_PaxDei or GAME_3on3FreeStyleRebound or GAME_FunkoFusion
+                    or GAME_Splitgate2 or GAME_Empulse => CustomAesKeyExpansion.DecryptWithRoundKeys,
+
+                GAME_ApexLegendsMobile => ApexLegendsMobileAes.DecryptApexMobile,
+                GAME_Snowbreak => SnowbreakAes.SnowbreakDecrypt,
+                GAME_MarvelRivals or GAME_TamasShadowveil => NetEaseAes.NetEaseDecrypt,
+                GAME_Undawn => ToaaAes.ToaaDecrypt,
+                GAME_DeadByDaylight or GAME_DeadByDaylight_Old => DBDAes.DbDDecrypt,
+                GAME_DreamStar => DreamStarAes.DreamStarDecrypt,
+                GAME_DeltaForce => DeltaForceAes.DeltaForceDecrypt,
+                GAME_PromiseMascotAgency => PMAAes.PMADecrypt,
+                GAME_Rennsport => RennsportAes.RennsportDecrypt,
+                GAME_TonyHawkProSkater12 or GAME_TonyHawkProSkater34 => THPS12Aes.THPS12Decrypt,
+                GAME_InfinityNikki => InfinityNikkiAes.InfinityNikkiDecrypt,
+                GAME_Spectre => SpectreDivideAes.SpectreDecrypt,
+                GAME_MindsEye => MindsEyeAes.MindsEyeDecrypt,
+                GAME_NeedForSpeedMobile => NFSMobileAes.NFSMobileDecrypt,
+                GAME_OnePieceAmbition => OnePieceAmbitionEncryption.OnePieceAmbitionDecrypt,
+                GAME_UnchartedWatersOrigin => UnchartedWatersOriginAes.UnchartedWatersOriginDecrypt,
+                GAME_ArenaBreakoutInfinite or GAME_ArenaBreakoutMobile => ABIDecryption.ABIDecrypt,
+                GAME_BloodBowl3 => BloodBowl3Aes.BloodBowl3Decrypt,
+                GAME_AssaultFireFuture => AssaultFireFutureAes.AssaultFireFutureDecrypt,
+                GAME_ArcRaiders or GAME_TheFinals => EmbarkAes.EmbarkDecrypt,
+                GAME_RocoKingdomWorld => RocoKingdomWorldAes.RocoKingdomWorldDecrypt,
+                GAME_DragonSwordAwakening => DragonSwordAes.DragonSwordDecrypt,
+                GAME_eBaseballProSpirit => ProSpiEncryption.ProSpiDecrypt,
+                GAME_SilverPalace => SilverPalaceAes.SilverPalaceDecrypt,
+                GAME_ValorantSource => ValorantSourceAes.ValorantSourceDecrypt,
+                GAME_PUBGMobile or GAME_PUBGLite => PUBGMobileAes.PUBGMobileDecrypt,
+                GAME_GangstarMirageCity => GangstarMirageCityAes.GangstarMirageCityDecrypt,
+                GAME_ChasingKaleidoRIDER => CKREncryption.CKRDecrypt,
                 _ => null
             };
         }
 
         public abstract void Initialize();
 
-        public void RegisterVfs(FileInfo file) => RegisterVfs(file.FullName);
-        public void RegisterVfs(string file) => RegisterRandomAccessVfs(new FRandomAccessFileStreamArchive(file, Versions), null, openPath => new FRandomAccessFileStreamArchive(openPath, Versions));
+        public virtual void RegisterVfs(FileInfo file) => RegisterVfs(file.FullName);
+        public virtual void RegisterVfs(string file) => RegisterRandomAccessVfs(new FRandomAccessFileStreamArchive(file, Versions), null, openPath => new FRandomAccessFileStreamArchive(openPath, Versions));
 
         public void RegisterVfs(FRandomAccessFileStreamArchive[] stream, Func<string, FArchive>? openContainerStreamFunc = null)
             => RegisterRandomAccessVfs(stream[0], stream.Length > 1 ? stream[1] : null, openContainerStreamFunc);
@@ -139,6 +144,7 @@ namespace CUE4Parse.FileProvider.Vfs
                 switch (archive.Name.SubstringAfterLast('.').ToUpper())
                 {
                     case "PAK":
+                    case "UPAK" when archive.Game is GAME_LordOfMysteries:
                         reader = new PakFileReader(archive);
                         break;
                     case "UTOC":
@@ -149,7 +155,7 @@ namespace CUE4Parse.FileProvider.Vfs
                         if (OnDemandOptions is null)
                             return;
                         var chunkToc = new IoChunkToc(archive);
-                        RegisterVfs(chunkToc, OnDemandOptions);
+                        RegisterVfs(chunkToc);
                         return;
                     default:
                         return;
@@ -173,6 +179,7 @@ namespace CUE4Parse.FileProvider.Vfs
                 switch (pakOrUtocArchive.Name.SubstringAfterLast('.').ToUpper())
                 {
                     case "PAK":
+                    case "UPAK" when pakOrUtocArchive.Game is GAME_LordOfMysteries:
                         reader = new PakFileReader(pakOrUtocArchive);
                         break;
                     case "UTOC":
@@ -183,7 +190,7 @@ namespace CUE4Parse.FileProvider.Vfs
                         if (OnDemandOptions is null)
                             return;
                         var chunkToc = new IoChunkToc(pakOrUtocArchive);
-                        RegisterVfs(chunkToc, OnDemandOptions);
+                        RegisterVfs(chunkToc);
                         return;
                     default:
                         return;
@@ -205,6 +212,7 @@ namespace CUE4Parse.FileProvider.Vfs
                 switch (pakOrUtocArchive.Name.SubstringAfterLast('.').ToUpper())
                 {
                     case "PAK":
+                    case "UPAK" when pakOrUtocArchive.Game is GAME_LordOfMysteries:
                         reader = new PakFileReader(pakOrUtocArchive);
                         break;
                     case "UTOC":
@@ -215,7 +223,7 @@ namespace CUE4Parse.FileProvider.Vfs
                         if (OnDemandOptions is null)
                             return;
                         var chunkToc = new IoChunkToc(pakOrUtocArchive);
-                        RegisterVfs(chunkToc, OnDemandOptions);
+                        RegisterVfs(chunkToc);
                         return;
                     default:
                         return;
@@ -228,20 +236,21 @@ namespace CUE4Parse.FileProvider.Vfs
             }
         }
 
-        public void RegisterVfs(IoChunkToc chunkToc, IoStoreOnDemandOptions options) => RegisterVfsAsync(chunkToc).GetAwaiter().GetResult();
+        public void RegisterVfs(IoChunkToc chunkToc) => RegisterVfsAsync(chunkToc).GetAwaiter().GetResult();
         public async Task RegisterVfsAsync(IoChunkToc chunkToc)
         {
             if (OnDemandOptions is null)
                 return;
 
             var downloader = new IoStoreOnDemandDownloader(OnDemandOptions);
-            foreach (var container in chunkToc.Containers)
+            foreach (var container in chunkToc.OnDemandToc.Containers)
             {
                 try
                 {
-                    var url = $"{chunkToc.Header.ChunksDirectory}/{container.UTocHash.ToString().ToLower()}.utoc";
+                    var url = $"{chunkToc.OnDemandToc.ChunksDirectory}/{container.UTocHash.ToString().ToLower()}.utoc";
                     var data = await downloader.Download(url).ConfigureAwait(false);
-                    PostLoadReader(new IoStoreOnDemandReader(new FStreamArchive($"{container.ContainerName}.utoc", data, Versions), chunkToc, container, downloader));
+                    // added _OnDemand suffix to prevent conflicts with regular IoStore UTOCs
+                    PostLoadReader(new IoStoreOnDemandReader(new FStreamArchive($"{container.ContainerName}_OnDemand.utoc", data, Versions), chunkToc, container, downloader));
                 }
                 catch (Exception e)
                 {
@@ -262,7 +271,7 @@ namespace CUE4Parse.FileProvider.Vfs
 
             _unloadedVfs[reader] = null;
             reader.IsConcurrent = isConcurrent;
-            if (!(reader.Game == EGame.GAME_MarvelRivals && reader is IoStoreReader)) // no custom encryption for MR IoStore
+            if (!(reader.Game == GAME_MarvelRivals && reader is IoStoreReader)) // no custom encryption for MR IoStore
             {
                 reader.CustomEncryption = CustomEncryption;
             }
@@ -270,38 +279,56 @@ namespace CUE4Parse.FileProvider.Vfs
             VfsRegistered?.Invoke(reader, _unloadedVfs.Count);
         }
 
-        public int Mount() => MountAsync().Result;
+        private void TryMountReader(IAesVfsReader reader, ref int countNewMounts)
+        {
+            if ((reader.IsEncrypted && CustomEncryption == null) || !reader.HasDirectoryIndex)
+                return;
+
+            try
+            {
+                reader.MountTo(Files, PathComparer, VfsMounted);
+                _unloadedVfs.TryRemove(reader, out _);
+                _mountedVfs[reader] = null;
+                Interlocked.Increment(ref countNewMounts);
+            }
+            catch (InvalidAesKeyException)
+            {
+                // Ignore this
+            }
+            catch (Exception e)
+            {
+                Log.Warning(e, "Uncaught exception while loading file {FileName}", reader.Path.SubstringAfterLast('/'));
+            }
+        }
+
+        public int Mount()
+        {
+            var countNewMounts = 0;
+            var readers = _unloadedVfs.Keys.ToArray();
+            Files.PreallocatePackageIndex(EstimatePackageIndexCapacity(readers.Where(reader =>
+                (!reader.IsEncrypted || CustomEncryption != null) && reader.HasDirectoryIndex)));
+
+            foreach (var reader in readers)
+            {
+                VerifyGlobalData(reader);
+                TryMountReader(reader, ref countNewMounts);
+            }
+
+            return countNewMounts;
+        }
+
         public async Task<int> MountAsync()
         {
             var countNewMounts = 0;
             var tasks = new LinkedList<Task>();
-            foreach (var reader in _unloadedVfs.Keys)
+            var readers = _unloadedVfs.Keys.ToArray();
+            Files.PreallocatePackageIndex(EstimatePackageIndexCapacity(readers.Where(reader =>
+                (!reader.IsEncrypted || CustomEncryption != null) && reader.HasDirectoryIndex)));
+
+            foreach (var reader in readers)
             {
                 VerifyGlobalData(reader);
-
-                if (reader.IsEncrypted && CustomEncryption == null || !reader.HasDirectoryIndex)
-                    continue;
-
-                tasks.AddLast(Task.Run(() =>
-                {
-                    try
-                    {
-                        reader.MountTo(Files, PathComparer, VfsMounted);
-                        _unloadedVfs.TryRemove(reader, out _);
-                        _mountedVfs[reader] = null;
-                        Interlocked.Increment(ref countNewMounts);
-                        return reader;
-                    }
-                    catch (InvalidAesKeyException)
-                    {
-                        // Ignore this
-                    }
-                    catch (Exception e)
-                    {
-                        Log.Warning(e, $"Uncaught exception while loading file {reader.Path.SubstringAfterLast('/')}");
-                    }
-                    return null;
-                }));
+                tasks.AddLast(Task.Run(() => TryMountReader(reader, ref countNewMounts)));
             }
 
             await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -319,11 +346,16 @@ namespace CUE4Parse.FileProvider.Vfs
         {
             var countNewMounts = 0;
             var tasks = new LinkedList<Task<IAesVfsReader?>>();
-            foreach (var (guid, key) in keys)
+            var submittedKeys = keys as IReadOnlyCollection<KeyValuePair<FGuid, FAesKey>> ?? keys.ToArray();
+            var submittedKeyGuids = submittedKeys.Select(x => x.Key).ToHashSet();
+            var readers = _unloadedVfs.Keys.Where(reader => submittedKeyGuids.Contains(reader.EncryptionKeyGuid)).ToArray();
+            Files.PreallocatePackageIndex(EstimatePackageIndexCapacity(readers.Where(reader => reader.HasDirectoryIndex)));
+
+            foreach (var (guid, key) in submittedKeys)
             {
-                foreach (var reader in _unloadedVfs.Keys.Where(it => it.EncryptionKeyGuid == guid))
+                foreach (var reader in readers.Where(it => it.EncryptionKeyGuid == guid))
                 {
-                    if (reader.Game == EGame.GAME_FragPunk && reader.Name.Contains("global")) reader.AesKey = key;
+                    if (reader.Game == GAME_FragPunk && reader.Name.Contains("global")) reader.AesKey = key;
                     VerifyGlobalData(reader);
 
                     if (!reader.HasDirectoryIndex)
@@ -345,7 +377,7 @@ namespace CUE4Parse.FileProvider.Vfs
                         }
                         catch (Exception e)
                         {
-                            Log.Warning(e, $"Uncaught exception while loading pak file {reader.Path.SubstringAfterLast('/')}");
+                            Log.Warning(e, "Uncaught exception while loading pak file {FileName}", reader.Path.SubstringAfterLast('/'));
                         }
                         return null;
                     }));
@@ -364,27 +396,35 @@ namespace CUE4Parse.FileProvider.Vfs
             return countNewMounts;
         }
 
+        private static int EstimatePackageIndexCapacity(IEnumerable<IAesVfsReader> readers)
+        {
+            long capacity = 0;
+            foreach (var reader in readers)
+            {
+                if (reader is IoStoreReader ioStoreReader)
+                    capacity += ioStoreReader.GetPackageDataChunkCount();
+            }
+
+            return (int) Math.Min(capacity, int.MaxValue);
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public IAesVfsReader GetArchive(string archiveName, StringComparison comparison = StringComparison.Ordinal)
+            => GetArchiveOrNull(archiveName, comparison) ?? throw new KeyNotFoundException($"There is no archive file with the name \"{archiveName}\"");
+
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public IAesVfsReader? GetArchiveOrNull(string archiveName, StringComparison comparison = StringComparison.Ordinal)
         {
-            var predicate = (IAesVfsReader x) => x.Name.Equals(archiveName, comparison);
-            return MountedVfs.FirstOrDefault(predicate) ??
-                   UnloadedVfs.FirstOrDefault(predicate) ??
-                   throw new KeyNotFoundException($"There is no archive file with the name \"{archiveName}\"");
+            return MountedVfs.FirstOrDefault(Predicate) ?? UnloadedVfs.FirstOrDefault(Predicate);
+            bool Predicate(IAesVfsReader x) => x.Name.Equals(archiveName, comparison);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetArchive(string archiveName, [MaybeNullWhen(false)] out IAesVfsReader archive, StringComparison comparison = StringComparison.Ordinal)
         {
-            try
-            {
-                archive = GetArchive(archiveName, comparison);
-            }
-            catch
-            {
-                archive = null;
-            }
-            return archive != null;
+            archive = GetArchiveOrNull(archiveName, comparison);
+            return archive is not null;
         }
 
         public GameFile this[string path, string archiveName, StringComparison comparison = StringComparison.Ordinal] => this[path, GetArchive(archiveName, comparison)];
@@ -396,15 +436,8 @@ namespace CUE4Parse.FileProvider.Vfs
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetGameFile(string path, string archiveName, [MaybeNullWhen(false)] out GameFile file, StringComparison comparison = StringComparison.Ordinal)
         {
-            try
-            {
-                file = this[path, archiveName, comparison];
-            }
-            catch
-            {
-                file = null;
-            }
-            return file != null;
+            file = null;
+            return TryGetArchive(archiveName, out var archive, comparison) && TryGetGameFile(path, archive.Files, out file);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

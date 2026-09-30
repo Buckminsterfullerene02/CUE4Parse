@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
 using CUE4Parse.FileProvider;
 using CUE4Parse.GameTypes.AoC.Objects;
 using CUE4Parse.GameTypes.OuterWorlds2.Readers;
@@ -10,13 +9,12 @@ using CUE4Parse.UE4.Exceptions;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse.Utils;
 using Newtonsoft.Json;
-using Serilog;
 using UExport = CUE4Parse.UE4.Assets.Exports.UObject;
 
 namespace CUE4Parse.UE4.Objects.UObject;
 
 [JsonConverter(typeof(FSoftObjectPathConverter))]
-public readonly struct FSoftObjectPath : IUStruct
+public readonly struct FSoftObjectPath : ILoadableObject, IUStruct
 {
     /** Asset path, patch to a top level object in a package. This is /package/path.assetname */
     public readonly FName AssetPathName;
@@ -27,9 +25,9 @@ public readonly struct FSoftObjectPath : IUStruct
 
     public FSoftObjectPath(FAssetArchive Ar)
     {
-        if (Ar.Ver < EUnrealEngineObjectUE4Version.ADDED_SOFT_OBJECT_PATH || Ar.Game == EGame.GAME_DragonQuestXI)
+        if (Ar.Ver < EUnrealEngineObjectUE4Version.ADDED_SOFT_OBJECT_PATH || Ar.Game == GAME_DragonQuestXI)
         {
-            var path = Ar.Game != EGame.GAME_DragonQuestXI ? Ar.ReadFString() : Ar.ReadFName().Text;
+            var path = Ar.Game != GAME_DragonQuestXI ? Ar.ReadFString() : Ar.ReadFName().Text;
             AssetPathName = path.SubstringBeforeLast('.');
             SubPathString = path.SubstringAfterLast('.');
             Owner = Ar.Owner;
@@ -54,7 +52,7 @@ public readonly struct FSoftObjectPath : IUStruct
             return;
         }
 
-        if (Ar.Game is EGame.GAME_AshesOfCreation && Ar is FAoCDBCReader)
+        if (Ar.Game is GAME_AshesOfCreation && Ar is FAoCDBCReader)
         {
             var str = Ar.ReadFName().Text;
             AssetPathName = str.SubstringBeforeLast(':');
@@ -63,7 +61,7 @@ public readonly struct FSoftObjectPath : IUStruct
             return;
         }
 
-        if (Ar.Game is EGame.GAME_OuterWorlds2 && Ar is FOW2ObjectsArchive OW2Ar)
+        if (Ar.Game is GAME_OuterWorlds2 && Ar is FOW2ObjectsArchive OW2Ar)
         {
             while (true)
             {
@@ -81,7 +79,7 @@ public readonly struct FSoftObjectPath : IUStruct
             return;
         }
 
-        AssetPathName = Ar.Ver >= EUnrealEngineObjectUE5Version.FSOFTOBJECTPATH_REMOVE_ASSET_PATH_FNAMES || Ar.Game == EGame.GAME_TheFirstDescendant ? new FName(new FTopLevelAssetPath(Ar).ToString()) : Ar.ReadFName();
+        AssetPathName = Ar.Ver >= EUnrealEngineObjectUE5Version.FSOFTOBJECTPATH_REMOVE_ASSET_PATH_FNAMES || Ar.Game == GAME_TheFirstDescendant ? new FName(new FTopLevelAssetPath(Ar).ToString()) : Ar.ReadFName();
         SubPathString = FFortniteMainBranchObjectVersion.Get(Ar) < FFortniteMainBranchObjectVersion.Type.SoftObjectPathUtf8SubPaths ? Ar.ReadFString() : Ar.ReadFUtf8String();
         Owner = Ar.Owner;
     }
@@ -94,6 +92,22 @@ public readonly struct FSoftObjectPath : IUStruct
     }
 
     #region Loading Methods
+    public Type? GetObjectType()
+    {
+        var provider = Owner?.Provider;
+        if (provider == null || AssetPathName.IsNone || string.IsNullOrEmpty(AssetPathName.Text)) return null;
+
+        var path = AssetPathName.Text;
+        var dot = path.LastIndexOf('.');
+        var objectName = dot == -1 ? path.SubstringAfterLast('/') : path[(dot + 1)..];
+        if (dot != -1) path = path[..dot];
+        if (!string.IsNullOrEmpty(SubPathString)) objectName = SubPathString.SubstringAfterLast('.');
+
+        if (!provider.TryLoadPackage(path, out var package)) return null;
+        var index = package.GetExportIndex(objectName);
+        return index < 0 ? null : package.ResolvePackageIndex(new FPackageIndex(package, index + 1))?.GetObjectType();
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public UExport Load() =>
         Load(Owner?.Provider ?? throw new ParserException("Package was loaded without a IFileProvider"));
@@ -111,23 +125,7 @@ public readonly struct FSoftObjectPath : IUStruct
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public T Load<T>() where T : UExport =>
-        Load<T>(Owner?.Provider ?? throw new ParserException("Package was loaded without a IFileProvider"));
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryLoad<T>([MaybeNullWhen(false)] out T export) where T : UExport
-    {
-        var provider = Owner?.Provider;
-        if (provider == null || AssetPathName.IsNone || string.IsNullOrEmpty(AssetPathName.Text))
-        {
-            export = null;
-            return false;
-        }
-        return TryLoad(provider, out export);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async Task<UExport> LoadAsync() => await LoadAsync(Owner?.Provider ?? throw new ParserException("Package was loaded without a IFileProvider"));
+    public async Task<UExport?> LoadAsync() => await LoadAsync(Owner?.Provider ?? throw new ParserException("Package was loaded without a IFileProvider"));
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public async Task<UExport?> TryLoadAsync()
@@ -138,24 +136,13 @@ public readonly struct FSoftObjectPath : IUStruct
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async Task<T> LoadAsync<T>() where T : UExport => await LoadAsync<T>(Owner?.Provider ?? throw new ParserException("Package was loaded without a IFileProvider"));
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async Task<T?> TryLoadAsync<T>() where T : UExport
-    {
-        var provider = Owner?.Provider;
-        if (provider == null || AssetPathName.IsNone || string.IsNullOrEmpty(AssetPathName.Text)) return null;
-        return await TryLoadAsync<T>(provider).ConfigureAwait(false);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T Load<T>(IFileProvider provider) where T : UExport =>
         Load(provider) as T ?? throw new ParserException("Loaded SoftObjectProperty but it was of wrong type");
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryLoad<T>(IFileProvider provider, [MaybeNullWhen(false)] out T export) where T : UExport
     {
-        if (!TryLoad(provider, out var genericExport) || !(genericExport is T cast))
+        if (!TryLoad(provider, out var genericExport) || genericExport is not T cast)
         {
             export = null;
             return false;
@@ -197,11 +184,18 @@ public readonly struct FSoftObjectPath : IUStruct
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public async Task<UExport?> TryLoadAsync(IFileProvider provider)
     {
-        // TODO: this aint a "Try"
-        var asset = await provider.LoadPackageObjectAsync(AssetPathName.Text);
-        return TryResolveSubObject(asset, out var export) ? export : null;
+        try
+        {
+            var asset = await provider.LoadPackageObjectAsync(AssetPathName.Text);
+            return TryResolveSubObject(asset, out var export) ? export : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
-    
+    #endregion
+
     private bool TryResolveSubObject(UExport asset, [MaybeNullWhen(false)] out UExport export)
     {
         if (string.IsNullOrEmpty(SubPathString))
@@ -209,9 +203,9 @@ public readonly struct FSoftObjectPath : IUStruct
             export = asset;
             return true;
         }
-        
+
         var current = asset;
-        
+
         var parts = SubPathString.Split('.');
         foreach (var part in parts)
         {
@@ -220,7 +214,7 @@ public readonly struct FSoftObjectPath : IUStruct
                 export = null;
                 return false;
             }
-            
+
             var foundExport = current.Owner.GetExportOrNull(part);
             if (foundExport == null)
             {
@@ -228,14 +222,13 @@ public readonly struct FSoftObjectPath : IUStruct
                 export = null;
                 return false;
             }
-            
+
             current = foundExport;
         }
-        
+
         export = current;
         return true;
     }
-    #endregion
 
     public override string ToString() => string.IsNullOrEmpty(SubPathString)
         ? AssetPathName.IsNone ? "" : AssetPathName.Text

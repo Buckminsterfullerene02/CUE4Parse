@@ -1,5 +1,4 @@
-using System;
-using System.Collections.Generic;
+using CUE4Parse.GameTypes.EOTU.Encryption;
 using CUE4Parse.UE4.Assets.Exports.Internationalization;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Exceptions;
@@ -120,27 +119,42 @@ public class FText : IUStruct
 
     public FText(FAssetArchive Ar)
     {
+        if (Ar.Ver < EUnrealEngineObjectUE4Version.FTEXT_HISTORY)
+        {
+            var SourceStringToImplantIntoHistory = Ar.ReadFString();
+            if (Ar.Ver >= EUnrealEngineObjectUE4Version.ADDED_NAMESPACE_AND_KEY_DATA_TO_FTEXT)
+            {
+                var @namespace = Ar.ReadFString();
+                var key = Ar.ReadFString();
+                TextHistory = new FTextHistory.Base(@namespace, key, SourceStringToImplantIntoHistory);
+            }
+        }
+
         Flags = Ar.Read<ETextFlag>();
 
-        HistoryType = Ar.Read<ETextHistoryType>();
-        TextHistory = HistoryType switch
+        if (Ar.Ver >= EUnrealEngineObjectUE4Version.FTEXT_HISTORY)
         {
-            ETextHistoryType.Base => new FTextHistory.Base(Ar),
-            ETextHistoryType.NamedFormat => new FTextHistory.NamedFormat(Ar),
-            ETextHistoryType.OrderedFormat => new FTextHistory.OrderedFormat(Ar),
-            ETextHistoryType.ArgumentFormat => new FTextHistory.ArgumentFormat(Ar),
-            ETextHistoryType.AsNumber => new FTextHistory.FormatNumber(Ar, HistoryType),
-            ETextHistoryType.AsPercent => new FTextHistory.FormatNumber(Ar, HistoryType),
-            ETextHistoryType.AsCurrency => new FTextHistory.FormatNumber(Ar, HistoryType),
-            ETextHistoryType.AsDate => new FTextHistory.AsDate(Ar),
-            ETextHistoryType.AsTime => new FTextHistory.AsTime(Ar),
-            ETextHistoryType.AsDateTime => new FTextHistory.AsDateTime(Ar),
-            ETextHistoryType.Transform => new FTextHistory.Transform(Ar),
-            ETextHistoryType.StringTableEntry => new FTextHistory.StringTableEntry(Ar),
-            ETextHistoryType.TextGenerator => new FTextHistory.TextGenerator(Ar),
-            _ => new FTextHistory.None(Ar)
-        };
-        if (Ar.Game == EGame.GAME_Splitgate2) Ar.Position += 4;
+            HistoryType = Ar.Read<ETextHistoryType>();
+            TextHistory = HistoryType switch
+            {
+                ETextHistoryType.Base => new FTextHistory.Base(Ar),
+                ETextHistoryType.NamedFormat => new FTextHistory.NamedFormat(Ar),
+                ETextHistoryType.OrderedFormat => new FTextHistory.OrderedFormat(Ar),
+                ETextHistoryType.ArgumentFormat => new FTextHistory.ArgumentFormat(Ar),
+                ETextHistoryType.AsNumber => new FTextHistory.FormatNumber(Ar, HistoryType),
+                ETextHistoryType.AsPercent => new FTextHistory.FormatNumber(Ar, HistoryType),
+                ETextHistoryType.AsCurrency => new FTextHistory.FormatNumber(Ar, HistoryType),
+                ETextHistoryType.AsDate => new FTextHistory.AsDate(Ar),
+                ETextHistoryType.AsTime => new FTextHistory.AsTime(Ar),
+                ETextHistoryType.AsDateTime => new FTextHistory.AsDateTime(Ar),
+                ETextHistoryType.Transform => new FTextHistory.Transform(Ar),
+                ETextHistoryType.StringTableEntry => new FTextHistory.StringTableEntry(Ar),
+                ETextHistoryType.TextGenerator => new FTextHistory.TextGenerator(Ar),
+                (ETextHistoryType)22 when Ar.Game is GAME_Zeus => new FTextHistory.Base("", Ar.Read<ulong>().ToString(), ""),
+                _ => new FTextHistory.None(Ar)
+            };
+            if (Ar.Game is GAME_Splitgate2 or GAME_Empulse) Ar.Position += 4;
+        }
     }
 
     public FText(string sourceString, string localizedString = "") : this("", "", sourceString, localizedString) { }
@@ -190,18 +204,31 @@ public abstract class FTextHistory : IUStruct
         public readonly string Key;
         public readonly string SourceString;
         public readonly string LocalizedString;
-        public override string Text => LocalizedString;
+        public sealed override string Text => LocalizedString;
 
         public Base(FAssetArchive Ar)
         {
             Namespace = Ar.ReadFString();
             Key = Ar.ReadFString();
             SourceString = Ar.ReadFString();
-            var strNamespace = Namespace;
-            if (Ar.Game is EGame.GAME_HonorofKingsWorld)
+            if (!Ar.IsFilterEditorOnly && FFortniteMainBranchObjectVersion.Get(Ar) >= FFortniteMainBranchObjectVersion.Type.AddDevNotesToFText)
             {
-                strNamespace = "";
+                Ar.SkipFString(); // dev notes
             }
+            var strNamespace = Namespace;
+
+            switch (Ar.Game)
+            {
+                case GAME_HonorofKingsWorld:
+                    strNamespace = "";
+                    break;
+                case GAME_EmbersofTheUncrowned:
+                    SourceString = EOTUStringEncryption.DecryptString(SourceString);
+                    break;
+                default:
+                    break;
+            }
+
             LocalizedString = Ar.Owner?.Provider?.Internationalization.SafeGet(strNamespace, Key, SourceString) ?? string.Empty;
         }
 
@@ -217,21 +244,20 @@ public abstract class FTextHistory : IUStruct
     public class NamedFormat : FTextHistory
     {
         public readonly FText SourceFmt;
-
-        public readonly Dictionary<string, FFormatArgumentValue>
-            Arguments; /* called FFormatNamedArguments in UE4 */
-
-        public override string Text => SourceFmt.Text;
+        public readonly Dictionary<string, FFormatArgumentValue> Arguments; /* called FFormatNamedArguments in UE4 */
+        public sealed override string Text { get; }
 
         public NamedFormat(FAssetArchive Ar)
         {
             SourceFmt = new FText(Ar);
-            int ArgCount = Ar.Read<int>();
-            Arguments = new Dictionary<string, FFormatArgumentValue>(ArgCount);
-            for (int i = 0; i < ArgCount; i++)
+            Arguments = Ar.ReadMap(Ar.ReadFString, () => new FFormatArgumentValue(Ar));
+
+            var text = SourceFmt.Text;
+            foreach (var (key, value) in Arguments)
             {
-                Arguments[Ar.ReadFString()] = new FFormatArgumentValue(Ar);
+                text = text.Replace($"{{{key}}}", value.Value.ToString());
             }
+            Text = text;
         }
     }
 
@@ -239,12 +265,19 @@ public abstract class FTextHistory : IUStruct
     {
         public readonly FText SourceFmt;
         public readonly FFormatArgumentValue[] Arguments; /* called FFormatOrderedArguments in UE4 */
-        public override string Text => SourceFmt.Text;
+        public sealed override string Text { get; }
 
         public OrderedFormat(FAssetArchive Ar)
         {
             SourceFmt = new FText(Ar);
             Arguments = Ar.ReadArray(() => new FFormatArgumentValue(Ar));
+
+            var text = SourceFmt.Text;
+            for (var i = 0; i < Arguments.Length; i++)
+            {
+                text = text.Replace($"{{{i}}}", Arguments[i].Value.ToString());
+            }
+            Text = text;
         }
     }
 
@@ -252,12 +285,19 @@ public abstract class FTextHistory : IUStruct
     {
         public readonly FText SourceFmt;
         public readonly FFormatArgumentData[] Arguments;
-        public override string Text => SourceFmt.Text;
+        public sealed override string Text { get; }
 
         public ArgumentFormat(FAssetArchive Ar)
         {
             SourceFmt = new FText(Ar);
             Arguments = Ar.ReadArray(() => new FFormatArgumentData(Ar));
+
+            var text = SourceFmt.Text;
+            foreach (var argument in Arguments)
+            {
+                text = text.Replace($"{{{argument.ArgumentName}}}", argument.ArgumentValue.Value.ToString());
+            }
+            Text = text;
         }
     }
 
@@ -370,13 +410,23 @@ public abstract class FTextHistory : IUStruct
             TableId = Ar.ReadFName();
             Key = Ar.ReadFString();
 
-            if (Ar.Owner?.Provider is not null &&
-                Ar.Owner.Provider.TryLoadPackageObject<UStringTable>(TableId.Text, out var table) &&
-                table.StringTable.KeysToEntries.TryGetValue(Key, out var t))
+            if (Ar.Owner?.Provider is { } provider)
             {
-                SourceString = t;
-                LocalizedString = Ar.Owner.Provider.Internationalization.SafeGet(table.StringTable.TableNamespace, Key, t);
+                if (UStringTable.TryGet(provider, TableId.Text, out var table) &&
+                    table.StringTable.KeysToEntries.TryGetValue(Key, out var t))
+                {
+                    SourceString = t;
+                    LocalizedString = provider.Internationalization.SafeGet(table.StringTable.TableNamespace, Key, t);
+                }
+                else
+                {
+                    // some games incorrectly utilize StringTableEntry for generated locres.
+                    // fallback to loading from loaded internationalization where TableId isn't a filepath.
+                    LocalizedString = provider.Internationalization.SafeGet(TableId.Text, Key);
+                }
             }
+
+            if (Ar.Game is GAME_DeltaForce) Ar.Position += 4;
         }
     }
 
@@ -429,7 +479,7 @@ public class FFormatArgumentData : IUStruct
 
     public FFormatArgumentData(FAssetArchive Ar)
     {
-        ArgumentName = Ar.ReadFString();
+        ArgumentName = Ar.Ver >= EUnrealEngineObjectUE4Version.K2NODE_VAR_REFERENCEGUIDS ? Ar.ReadFString() : new FText(Ar).Text;
         ArgumentValue = new FFormatArgumentValue(Ar, true);
     }
 }
@@ -460,7 +510,7 @@ public class FNumberFormattingOptions : IUStruct
 
     public FNumberFormattingOptions(FAssetArchive Ar)
     {
-        AlwaysSign = FEditorObjectVersion.Get(Ar) > FEditorObjectVersion.Type.AddedAlwaysSignNumberFormattingOption && Ar.ReadBoolean();
+        AlwaysSign = FEditorObjectVersion.Get(Ar) >= FEditorObjectVersion.Type.AddedAlwaysSignNumberFormattingOption && Ar.ReadBoolean();
         UseGrouping = Ar.ReadBoolean();
         RoundingMode = Ar.Read<ERoundingMode>();
         MinimumIntegralDigits = Ar.Read<int>();

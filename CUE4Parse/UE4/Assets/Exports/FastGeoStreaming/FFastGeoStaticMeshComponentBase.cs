@@ -8,6 +8,7 @@ public class FFastGeoStaticMeshComponentBase : FFastGeoMeshComponent
     {
         SceneProxyDesc.StaticMeshSceneProxyDesc = new FStaticMeshSceneProxyDesc(Ar);
         bUseDefaultCollision = Ar.ReadBoolean();
+        if (Ar.Game is GAME_WutheringWaves) Ar.SkipFixedArray(sizeof(uint)*3);
     }
 }
 

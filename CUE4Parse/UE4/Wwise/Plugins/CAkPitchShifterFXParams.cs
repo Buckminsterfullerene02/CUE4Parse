@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.InteropServices;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
@@ -30,7 +29,7 @@ public struct AkPitchShifterFXParams
         bProcessLFE = Ar.Read<byte>() != 0;
         bSyncDry = Ar.Read<byte>() != 0;
         Voice.fPitchFactor = (float) Math.Pow(2f, Ar.Read<float>() * 0.000833333354f);
-        Voice.Filter = Ar.Read<AkVoiceFilterParams>();
+        Voice.Filter = Ar.Read<AkFilterParams>();
     }
 }
 
@@ -48,7 +47,7 @@ public enum AkInputType : uint
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct AkPitchVoiceParams
 {
-    public AkVoiceFilterParams Filter;
+    public AkFilterParams Filter;
     public float fPitchFactor;
     public float fGain;
     public bool bEnable;
@@ -58,16 +57,6 @@ public struct AkPitchVoiceParams
         bEnable = Ar.Read<byte>() != 0;
         fPitchFactor = (float) Math.Pow(2f, Ar.Read<float>() * 0.000833333354f);
         fGain = MathF.Pow(10f, Ar.Read<float>() * 0.05f);
-        Filter = Ar.Read<AkVoiceFilterParams>();
+        Filter = Ar.Read<AkFilterParams>();
     }
 }
-
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct AkVoiceFilterParams
-{
-    public AkFilterType eFilterType;
-    public float fFilterGain;
-    public float fFilterFrequency;
-    public float fFilterQFactor;
-}
-

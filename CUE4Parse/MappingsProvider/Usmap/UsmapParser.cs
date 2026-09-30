@@ -1,13 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.IO.Compression;
-using CUE4Parse.Compression;
+using System.Text;
 using CUE4Parse.UE4.Exceptions;
+using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Objects.Core.Serialization;
 using CUE4Parse.UE4.Readers;
 using CUE4Parse.UE4.Versions;
-using ZstdSharp;
+
+using CompMethod = CUE4Parse.Compression.CompressionMethod;
 
 namespace CUE4Parse.MappingsProvider.Usmap;
 
@@ -17,6 +15,8 @@ public class UsmapParser
     public readonly TypeMappings? Mappings;
     public readonly EUsmapCompressionMethod CompressionMethod;
     public readonly EUsmapVersion Version;
+    public readonly bool HasVersioning;
+    public readonly FEngineVersion? EngineVersion;
     public readonly FPackageFileVersion PackageVersion;
     public readonly FCustomVersionContainer CustomVersions;
     public readonly uint NetCL;
@@ -27,6 +27,9 @@ public class UsmapParser
 
     public UsmapParser(FArchive archive, StringComparer? comparer = null)
     {
+        if (archive.Length < 2)
+            throw new ParserException("Usmap is empty");
+
         var magic = archive.Read<ushort>();
         if (magic != FileMagic)
             throw new ParserException("Usmap has invalid magic");
@@ -37,9 +40,14 @@ public class UsmapParser
 
         var Ar = new FUsmapReader(archive, Version);
 
-        var bHasVersioning = Ar.Version >= EUsmapVersion.PackageVersioning && Ar.ReadBoolean();
-        if (bHasVersioning)
+        HasVersioning = Ar.Version >= EUsmapVersion.PackageVersioning && Ar.ReadBoolean();
+        if (HasVersioning)
         {
+            if (Ar.Version >= EUsmapVersion.EngineVersioning)
+            {
+                EngineVersion = new FEngineVersion(Ar);
+            }
+
             PackageVersion = new FPackageFileVersion(Ar.Read<int>(), Ar.Read<int>());
             CustomVersions = new FCustomVersionContainer(Ar);
             NetCL = Ar.Read<uint>();
@@ -57,34 +65,24 @@ public class UsmapParser
         var decompSize = Ar.Read<uint>();
 
         var data = new byte[decompSize];
-        switch (CompressionMethod)
+
+        if (CompressionMethod == EUsmapCompressionMethod.None)
         {
-            case EUsmapCompressionMethod.None:
+            if (compSize != decompSize)
+                throw new ParserException("No compression: Compression size must be equal to decompression size");
+            Ar.ReadExactly(data, 0, (int) compSize);
+        }
+        else
+        {
+            var method = CompressionMethod switch
             {
-                if (compSize != decompSize)
-                    throw new ParserException("No compression: Compression size must be equal to decompression size");
-                _ = Ar.Read(data, 0, (int) compSize);
-                break;
-            }
-            case EUsmapCompressionMethod.Oodle:
-            {
-                OodleHelper.Decompress(Ar.ReadBytes((int) compSize), 0, (int) compSize, data, 0, (int) decompSize);
-                break;
-            }
-            case EUsmapCompressionMethod.Brotli:
-            {
-                using var decoder = new BrotliDecoder();
-                decoder.Decompress(Ar.ReadBytes((int) compSize), data, out _, out _);
-                break;
-            }
-            case EUsmapCompressionMethod.ZStandard:
-            {
-                var decompressor = new Decompressor();
-                data = decompressor.Unwrap(Ar.ReadBytes((int) compSize), (int) decompSize).ToArray();
-                break;
-            }
-            default:
-                throw new ParserException($"Invalid compression method {CompressionMethod}");
+                EUsmapCompressionMethod.Oodle => CompMethod.Oodle,
+                EUsmapCompressionMethod.Brotli => CompMethod.Brotli,
+                EUsmapCompressionMethod.ZStandard => CompMethod.Zstd,
+                _ => CompMethod.Unknown
+            };
+            var compressed = Ar.ReadBytes((int) compSize);
+            Compression.Compression.Decompress(compressed, data, method, Ar);
         }
 
         Ar = new FUsmapReader(new FByteArchive(Ar.Name, data), Ar.Version);
@@ -93,7 +91,7 @@ public class UsmapParser
         for (var i = 0; i < nameSize; i++)
         {
             var nameLength = Ar.Version >= EUsmapVersion.LongFName ? Ar.Read<ushort>() : Ar.Read<byte>();
-            nameLut.Add(Ar.ReadStringUnsafe(nameLength));
+            nameLut.Add(Encoding.UTF8.GetString(Ar.ReadBytes(nameLength)));
         }
 
         var enumCount = Ar.Read<uint>();
@@ -111,7 +109,7 @@ public class UsmapParser
                 {
                     var value = Ar.Read<ulong>();
                     var name = Ar.ReadName(nameLut)!;
-                    enumNames[(int)value] = name;
+                    enumNames[(long)value] = name;
                 }
             }
             else

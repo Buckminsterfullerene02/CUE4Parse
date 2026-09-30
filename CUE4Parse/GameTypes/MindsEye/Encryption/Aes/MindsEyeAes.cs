@@ -1,4 +1,3 @@
-using System;
 using CUE4Parse.Encryption.Aes;
 using CUE4Parse.UE4.VirtualFileSystem;
 
@@ -28,7 +27,7 @@ public static class MindsEyeAes
         }
     }
 
-    public static byte[] MindsEyeDecrypt(byte[] bytes, int beginOffset, int count, bool isIndex, IAesVfsReader reader)
+    public static byte[] MindsEyeDecrypt(byte[] bytes, int beginOffset, int count, bool isIndex, IAesVfsReader reader, object? customData = null)
     {
         if (bytes.Length < beginOffset + count)
             throw new IndexOutOfRangeException("beginOffset + count is larger than the length of bytes");

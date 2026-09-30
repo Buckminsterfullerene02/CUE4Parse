@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.CompilerServices;
 using CUE4Parse.Compression;
 using CUE4Parse.Encryption.Aes;
@@ -41,30 +40,45 @@ public abstract partial class AbstractAesVfsReader : AbstractVfsReader, IAesVfsR
             var backupKey = AesKey;
             AesKey = key;
             try { result = CustomEncryption(bytes, 0, bytes.Length, true, this); }
-            finally { AesKey = backupKey; } 
+            finally { AesKey = backupKey; }
         }
         else
         {
-            result = bytes.Decrypt(key);
+            result = DecryptBytes(bytes, 0, bytes.Length, key, true);
         }
 
         return IsValidIndex(result);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected byte[] Decrypt(byte[] bytes, FAesKey? key, bool bypassMountPointCheck = false)
+    protected byte[] Decrypt(byte[] bytes, int beginOffset, int count, FAesKey? key,
+        bool bypassMountPointCheck = false, bool isIndex = false)
+    {
+        EnsureValidAesKey(key, bypassMountPointCheck);
+        return DecryptBytes(bytes, beginOffset, count, key!, isIndex);
+    }
+
+    protected void EnsureValidAesKey(FAesKey? key, bool bypassMountPointCheck = false)
     {
         if (bDecrypted)
-        {
-            return bytes.Decrypt(key!);
-        }
-
+            return;
         if (key != null && (TestAesKey(key) || bypassMountPointCheck))
         {
             bDecrypted = true;
-            return bytes.Decrypt(key!);
+            return;
         }
         throw new InvalidAesKeyException("Reading encrypted data requires a valid aes key");
+    }
+
+    protected virtual byte[] DecryptBytes(byte[] bytes, int beginOffset, int count, FAesKey key, bool isIndex)
+    {
+        if (beginOffset == 0 && count == bytes.Length)
+        {
+            bytes.DecryptInPlace(key);
+            return bytes;
+        }
+
+        return bytes.Decrypt(beginOffset, count, key);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -74,26 +88,26 @@ public abstract partial class AbstractAesVfsReader : AbstractVfsReader, IAesVfsR
     protected byte[] DecryptIfEncrypted(byte[] bytes, int beginOffset, int count) =>
         DecryptIfEncrypted(bytes, beginOffset, count, IsEncrypted);
 
-    protected byte[] DecryptIfEncrypted(byte[] bytes, bool isEncrypted, bool isIndex = false)
+    protected byte[] DecryptIfEncrypted(byte[] bytes, bool isEncrypted, bool isIndex = false, object? customData = null)
     {
         if (!isEncrypted) return bytes;
         if (CustomEncryption != null)
         {
-            return CustomEncryption(bytes, 0, bytes.Length, isIndex, this);
+            return CustomEncryption(bytes, 0, bytes.Length, isIndex, this, customData);
         }
 
-        return Decrypt(bytes, AesKey);
+        return Decrypt(bytes, 0, bytes.Length, AesKey, isIndex: isIndex);
     }
 
-    protected byte[] DecryptIfEncrypted(byte[] bytes, int beginOffset, int count, bool isEncrypted, bool bypassMountPointCheck = false, bool isIndex = false)
+    protected byte[] DecryptIfEncrypted(byte[] bytes, int beginOffset, int count, bool isEncrypted, bool bypassMountPointCheck = false, bool isIndex = false, object? customData = null)
     {
         if (!isEncrypted) return bytes;
         if (CustomEncryption != null)
         {
-            return CustomEncryption(bytes, beginOffset, count, isIndex, this);
+            return CustomEncryption(bytes, beginOffset, count, isIndex, this, customData);
         }
 
-        return Decrypt(bytes, AesKey, bypassMountPointCheck);
+        return Decrypt(bytes, beginOffset, count, AesKey, bypassMountPointCheck, isIndex);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

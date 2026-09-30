@@ -1,8 +1,6 @@
-using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Threading.Tasks;
 using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Readers;
@@ -24,7 +22,7 @@ namespace CUE4Parse.UE4.Objects.UObject
     /// array index will be (-FPackageIndex - 1)
     /// </summary>
     [JsonConverter(typeof(FPackageIndexConverter))]
-    public class FPackageIndex : IEquatable<FPackageIndex>
+    public class FPackageIndex : ILoadableObject, IEquatable<FPackageIndex>
     {
         /// <summary>
         /// Values greater than zero indicate that this is an index into the ExportMap.  The
@@ -65,7 +63,7 @@ namespace CUE4Parse.UE4.Objects.UObject
         public bool IsImport => Index < 0;
 
         private string? _name;
-        public string Name => _name ?? (_name = ResolvedObject?.Name.Text ?? "None");
+        public string Name => _name ??= ResolvedObject?.Name.Text ?? "None";
 
         public FPackageIndex(FAssetArchive Ar, int index)
         {
@@ -105,7 +103,7 @@ namespace CUE4Parse.UE4.Objects.UObject
 
         protected internal void WriteJson(JsonWriter writer, JsonSerializer serializer)
         {
-            if (TryLoad<UProperty>(out var property))
+            if (this.TryLoad<UProperty>(out var property))
             {
                 serializer.Serialize(writer, property);
             }
@@ -117,27 +115,7 @@ namespace CUE4Parse.UE4.Objects.UObject
 
         #region Loading Methods
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public T? Load<T>() where T : UExport => Owner?.FindObject(this)?.Value as T;
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryLoad<T>([MaybeNullWhen(false)] out T export) where T : UExport
-        {
-            if (!TryLoad(out var genericExport) || genericExport is not T cast)
-            {
-                export = default;
-                return false;
-            }
-
-            export = cast;
-            return true;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public async Task<T> LoadAsync<T>() where T : UExport =>
-            await LoadAsync() as T ?? throw new ParserException($"Loaded {ToString()} but it was of wrong type");
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public async Task<T?> TryLoadAsync<T>() where T : UExport => await TryLoadAsync() as T;
+        public Type? GetObjectType() => ResolvedObject?.GetObjectType();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public UExport? Load() => ResolvedObject?.Load();
@@ -157,19 +135,14 @@ namespace CUE4Parse.UE4.Objects.UObject
         {
             if (ResolvedObject != null)
                 return await ResolvedObject.LoadAsync();
-            throw new ParserException($"{ToString()} could not be loaded");
+            return null;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public async Task<UExport?> TryLoadAsync()
         {
             if (ResolvedObject != null)
-            {
-                var loadedObj = await ResolvedObject.TryLoadAsync();
-                if (loadedObj != null)
-                    return loadedObj;
-            }
-
+                return await ResolvedObject.TryLoadAsync();
             return null;
         }
         #endregion
@@ -194,7 +167,7 @@ namespace CUE4Parse.UE4.Objects.UObject
     /// contained within the same package)
     /// </summary>
     [JsonConverter(typeof(FObjectResourceConverter))]
-    public abstract class FObjectResource : IObject
+    public abstract class FObjectResource
     {
         public FName ObjectName;
         public FPackageIndex? OuterIndex;
@@ -243,14 +216,34 @@ namespace CUE4Parse.UE4.Objects.UObject
             ClassIndex = new FPackageIndex(Ar);
             SuperIndex = new FPackageIndex(Ar);
             TemplateIndex = Ar.Ver >= EUnrealEngineObjectUE4Version.TemplateIndex_IN_COOKED_EXPORTS ? new FPackageIndex(Ar) : new FPackageIndex();
-            OuterIndex = new FPackageIndex(Ar);
+            OuterIndex = Ar.Ver >= EUnrealEngineObjectUE3Version.Release50 ? new FPackageIndex(Ar) : new FPackageIndex();
             ObjectName = Ar.ReadFName();
-            ObjectFlags = Ar.Read<uint>();
+            if (Ar.Ver >= EUnrealEngineObjectUE3Version.AddedArcheType && Ar.Ver < EUnrealEngineObjectUE4Version.REMOVE_ARCHETYPE_INDEX_FROM_LINKER_TABLES)
+            {
+                new FPackageIndex(Ar); // Archetype
+            }
+
+            if (Ar.Ver >= EUnrealEngineObjectUE3Version.Use64BitFlag && Ar.Game < GAME_UE4_0)
+            {
+                Ar.Position += sizeof(ulong); // ulong - ObjectFlagsLegacy
+            }
+            else
+            {
+                ObjectFlags = Ar.Read<uint>();
+            }
 
             if (Ar.Ver < EUnrealEngineObjectUE4Version.e64BIT_EXPORTMAP_SERIALSIZES)
             {
                 SerialSize = Ar.Read<int>();
-                SerialOffset = Ar.Read<int>();
+
+                if (Ar.Game == GAME_RocketLeague && (int)Ar.LicenseeVer > 22)
+                {
+                    SerialOffset = Ar.Read<long>();
+                }
+                else if (SerialSize > 0 || Ar.Ver >= EUnrealEngineObjectUE3Version.MOVED_EXPORTIMPORTMAPS_ADDED_TOTALHEADERSIZE)
+                {
+                    SerialOffset = Ar.Read<int>();
+                }
             }
             else
             {
@@ -258,12 +251,38 @@ namespace CUE4Parse.UE4.Objects.UObject
                 SerialOffset = Ar.Read<long>();
             }
 
-            ForcedExport = Ar.ReadBoolean();
-            NotForClient = Ar.ReadBoolean();
-            NotForServer = Ar.ReadBoolean();
-            PackageGuid = Ar.Ver < EUnrealEngineObjectUE5Version.REMOVE_OBJECT_EXPORT_PACKAGE_GUID ? Ar.Read<FGuid>() : default;
-            IsInheritedInstance = Ar.Ver >= EUnrealEngineObjectUE5Version.TRACK_OBJECT_EXPORT_IS_INHERITED && Ar.ReadBoolean();
-            PackageFlags = Ar.Read<uint>();
+            if (Ar.Game >= GAME_UE4_0)
+            {
+                ForcedExport = Ar.ReadBoolean();
+                NotForClient = Ar.ReadBoolean();
+                NotForServer = Ar.ReadBoolean();
+            }
+
+            if (Ar.Ver >= EUnrealEngineObjectUE3Version.AddedComponentMapToExports && Ar.Ver < EUnrealEngineObjectUE3Version.REMOVED_COMPONENT_MAP)
+            {
+                Ar.ReadMap(Ar.ReadFName, () => new FPackageIndex(Ar)); // LegacyComponentMap
+            }
+
+            if (Ar.Ver >= EUnrealEngineObjectUE3Version.FOBJECTEXPORT_EXPORTFLAGS && Ar.Game < GAME_UE4_0)
+            {
+                Ar.Read<int>(); // ExportFlags
+            }
+
+            if (Ar.Ver >= EUnrealEngineObjectUE3Version.LINKERFREE_PACKAGEMAP)
+            {
+                if (Ar.Ver < EUnrealEngineObjectUE4Version.REMOVE_NET_INDEX)
+                {
+                    Ar.ReadArray<int>(); // NetObjectCount
+                }
+
+                PackageGuid = Ar.Ver < EUnrealEngineObjectUE5Version.REMOVE_OBJECT_EXPORT_PACKAGE_GUID ? Ar.Read<FGuid>() : default;
+                IsInheritedInstance = Ar.Ver >= EUnrealEngineObjectUE5Version.TRACK_OBJECT_EXPORT_IS_INHERITED && Ar.ReadBoolean();
+
+                if (Ar.Ver >= EUnrealEngineObjectUE3Version.AddedPackageFlags)
+                {
+                    PackageFlags = Ar.Read<uint>();
+                }
+            }
             NotAlwaysLoadedForEditorGame = Ar.Ver >= EUnrealEngineObjectUE4Version.LOAD_FOR_EDITOR_GAME && Ar.ReadBoolean();
             IsAsset = Ar.Ver >= EUnrealEngineObjectUE4Version.COOKED_ASSETS_IN_EDITOR_SUPPORT && Ar.ReadBoolean();
             GeneratePublicHash = Ar.Ver >= EUnrealEngineObjectUE5Version.OPTIONAL_RESOURCES && Ar.ReadBoolean();
@@ -362,12 +381,12 @@ namespace CUE4Parse.UE4.Objects.UObject
             OuterIndex = new FPackageIndex(Ar);
             ObjectName = Ar.ReadFName();
 
-            if (Ar.Ver >= EUnrealEngineObjectUE4Version.NON_OUTER_PACKAGE_IMPORT && !Ar.IsFilterEditorOnly)
+            if (Ar.Game >=  GAME_UE5_8 || Ar.Ver >= EUnrealEngineObjectUE4Version.NON_OUTER_PACKAGE_IMPORT && !Ar.IsFilterEditorOnly)
             {
                 PackageName = Ar.ReadFName();
             }
 
-            if (Ar.Game == EGame.GAME_RacingMaster) Ar.Position += 1;
+            if (Ar.Game == GAME_RacingMaster) Ar.Position += 1;
 
             ImportOptional = Ar.Ver >= EUnrealEngineObjectUE5Version.OPTIONAL_RESOURCES && Ar.ReadBoolean();
         }

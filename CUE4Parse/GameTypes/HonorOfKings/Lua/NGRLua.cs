@@ -1,14 +1,11 @@
-using System;
 using System.Buffers.Binary;
-using System.Collections.Generic;
-using System.IO;
-using CUE4Parse.UE4.Lua;
-using CUE4Parse.UE4.Versions;
-using Serilog;
+using CUE4Parse.UE4.Lua.Archives;
+using CUE4Parse.UE4.Lua.Readers;
+using CUE4Parse.UE4.Lua.Writers;
 
 namespace CUE4Parse.GameTypes.HonorOfKings.Lua;
 
-public class FNGRLuaArchive(string name, byte[] data, VersionContainer? versions = null) : FLuaArchive(name, data, versions)
+public class FNGRLuaArchive(string name, byte[] data) : FLua54Archive(name, data)
 {
     public T ReadBE<T>() where T : unmanaged
     {
@@ -74,7 +71,7 @@ public class NGRLuaReader
 
     public byte[] DecryptLuaInternal(string name, byte[] data)
     {
-        using var Ar = new FNGRLuaArchive(name, data, null);
+        using var Ar = new FNGRLuaArchive(name, data);
         if (Ar.Length < 0x14)
         {
             Log.Warning("Fade Face header is too small");
@@ -84,7 +81,7 @@ public class NGRLuaReader
         Header = new FadeFaceHeader(Ar);
         if (Header.Magic != NGR_LUA_MAGIC)
         {
-            Log.Warning($"Invalid magic: 0x{Header.Magic:X}, expected: 0x{NGR_LUA_MAGIC:X}");
+            Log.Warning("Invalid magic: 0x{Magic:X}, expected: 0x{ExpectedMagic:X}", Header.Magic, NGR_LUA_MAGIC);
             return data;
         }
 
@@ -158,17 +155,7 @@ public class NGRLuaReader
 
     private static byte[] Restore(string name, byte[] decryptedLuaBytecode)
     {
-        using var Ar = new FNGRLuaArchive(name, decryptedLuaBytecode, null);
-
-        var lua = FLuaReader.ReadLua54(Ar, _opcodeMapping);
-
-        using var msOut = new MemoryStream(decryptedLuaBytecode.Length);
-        using (var writer = new FLuaArchiveWriter(msOut))
-        {
-            FLuaWriter54.Write(writer, lua);
-            writer.Flush();
-        }
-
-        return msOut.ToArray();
+        using var Ar = new FNGRLuaArchive(name, decryptedLuaBytecode);
+        return new FLuaWriter54(FLua54Reader.ReadLuaBytecode(Ar, _opcodeMapping)).GetBuffer();
     }
 }

@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text.RegularExpressions;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Assets.Objects;
@@ -9,12 +6,12 @@ using CUE4Parse.UE4.Objects.Engine;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
 using Newtonsoft.Json;
-using Serilog;
 
 namespace CUE4Parse.UE4.Assets.Exports.Material;
 
 public class UMaterial : UMaterialInterface
 {
+
     public bool TwoSided { get; private set; }
     public bool bDisableDepthTest { get; private set; }
     public bool bIsMasked { get; private set; }
@@ -23,15 +20,15 @@ public class UMaterial : UMaterialInterface
     public ETranslucencyLightingMode TranslucencyLightingMode { get; private set; } = ETranslucencyLightingMode.TLM_VolumetricNonDirectional;
     public EMaterialShadingModel ShadingModel { get; private set; } = EMaterialShadingModel.MSM_Unlit;
     public float OpacityMaskClipValue { get; private set; } = 0.333f;
-    public List<UTexture> ReferencedTextures { get; } = [];
+    public List<FPackageIndex?> ReferencedTextures { get; } = [];
     public bool bForceNaniteUsage;
 
-    private readonly List<IObject> _displayedReferencedTextures = [];
+    private readonly List<FPackageIndex?> _displayedReferencedTextures = [];
     private bool _shouldDisplay;
 
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
-        if (Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 16;
+        if (Ar.Game == GAME_WorldofJadeDynasty) Ar.Position += 16;
         base.Deserialize(Ar, validPos);
         TwoSided = GetOrDefault<bool>(nameof(TwoSided));
         bDisableDepthTest = GetOrDefault<bool>(nameof(bDisableDepthTest));
@@ -43,10 +40,10 @@ public class UMaterial : UMaterialInterface
         OpacityMaskClipValue = GetOrDefault(nameof(OpacityMaskClipValue), OpacityMaskClipValue);
 
         // 4.25+
-        if (Ar.Game >= EGame.GAME_UE4_25 || Ar.Game < EGame.GAME_UE4_0)
+        if (Ar.Game >= GAME_UE4_25 || Ar.Game < GAME_UE4_0)
         {
             CachedExpressionData ??= GetOrDefault<FStructFallback>(nameof(CachedExpressionData));
-            if (CachedExpressionData != null && CachedExpressionData.TryGetValue(out UTexture[] referencedTextures, "ReferencedTextures"))
+            if (CachedExpressionData != null && CachedExpressionData.TryGetValue(out FPackageIndex?[] referencedTextures, "ReferencedTextures"))
                 ReferencedTextures.AddRange(referencedTextures);
 
             if (TryGetValue(out referencedTextures, "ReferencedTextures"))
@@ -55,12 +52,12 @@ public class UMaterial : UMaterialInterface
 
         // UE4 has complex FMaterialResource format, so avoid reading anything here, but
         // scan package's imports for UTexture objects instead
-        if (Ar is { Game: >= EGame.GAME_UE5_0, Owner.Provider.SkipReferencedTextures: false })
+        if (Ar is { Game: >= GAME_UE5_0, Owner.Provider.SkipReferencedTextures: false })
             ScanForTextures(Ar);
 
         if (Ar.Ver >= EUnrealEngineObjectUE4Version.PURGED_FMATERIAL_COMPILE_OUTPUTS)
         {
-            if (Ar is { Game: >= EGame.GAME_UE4_25, Owner.Provider.ReadShaderMaps: true })
+            if (Ar is { Game: >= GAME_UE4_25, Owner.Provider.ReadShaderMaps: true })
             {
                 var saved = Ar.Position;
                 try
@@ -102,44 +99,20 @@ public class UMaterial : UMaterialInterface
         }
     }
 
-    public UTexture? GetFirstTexture() => ReferencedTextures.Count > 0 ? ReferencedTextures[0] : null;
-    public UTexture? GetTextureAtIndex(int index) => ReferencedTextures.Count > index ? ReferencedTextures[index] : null;
+    public UTexture? GetFirstTexture() => ReferencedTextures.Count > 0 ? ReferencedTextures[0]?.Load<UTexture>() : null;
+    public UTexture? GetTextureAtIndex(int index) => ReferencedTextures.Count > index ? ReferencedTextures[index]?.Load<UTexture>() : null;
 
     private void ScanForTextures(FAssetArchive Ar)
     {
-        // !! NOTE: this code will not work when textures are located in the same package - they don't present in import table
-        // !! but could be found in export table. That's true for Simplygon-generated materials.
-        switch (Ar.Owner)
+        for (var i = 0; i < Ar.Owner?.ImportMapLength; i++)
         {
-            case IoPackage io:
-            {
-                foreach (var import in io.ImportMap)
-                {
-                    var resolved = io.ResolveObjectIndex(import);
-                    if (resolved?.Class == null) continue;
+            var ptr = new FPackageIndex(Ar, -i - 1);
+            if (!ptr.IsA<UTexture>()) continue;
 
-                    if (!resolved.Class.Name.Text.StartsWith("Texture", StringComparison.OrdinalIgnoreCase) ||
-                        !resolved.TryLoad(out var tex) || tex is not UTexture texture) continue;
-
-                    _displayedReferencedTextures.Add(resolved);
-                    ReferencedTextures.Add(texture);
-                }
-                break;
-            }
-            case Package pak: // ue5?
-            {
-                for (var i = 0; i < pak.ImportMap.Length; i++)
-                {
-                    if (!pak.ImportMap[i].ClassName.Text.StartsWith("Texture", StringComparison.OrdinalIgnoreCase)) continue;
-                    var resolved = pak.ResolvePackageIndex(new FPackageIndex(Ar, -i - 1));
-                    if (resolved?.Class == null || !resolved.TryLoad(out var tex) || tex is not UTexture texture) continue;
-
-                    _displayedReferencedTextures.Add(resolved);
-                    ReferencedTextures.Add(texture);
-                }
-                break;
-            }
+            _displayedReferencedTextures.Add(ptr);
+            ReferencedTextures.Add(ptr);
         }
+
         _shouldDisplay = _displayedReferencedTextures.Count > 0;
     }
 
@@ -154,7 +127,7 @@ public class UMaterial : UMaterialInterface
         var opWeight = 0;
         var emWeight = 0;
 
-        void Diffuse(bool check, int weight, UTexture tex)
+        void Diffuse(bool check, int weight, FPackageIndex tex)
         {
             if (check && weight > diffWeight)
             {
@@ -163,7 +136,7 @@ public class UMaterial : UMaterialInterface
             }
         }
 
-        void Normal(bool check, int weight, UTexture tex)
+        void Normal(bool check, int weight, FPackageIndex tex)
         {
             if (check && weight > normWeight)
             {
@@ -172,7 +145,7 @@ public class UMaterial : UMaterialInterface
             }
         }
 
-        void Specular(bool check, int weight, UTexture tex)
+        void Specular(bool check, int weight, FPackageIndex tex)
         {
             if (check && weight > specWeight)
             {
@@ -181,7 +154,7 @@ public class UMaterial : UMaterialInterface
             }
         }
 
-        void SpecPower(bool check, int weight, UTexture tex)
+        void SpecPower(bool check, int weight, FPackageIndex tex)
         {
             if (check && weight > specPowWeight)
             {
@@ -190,7 +163,7 @@ public class UMaterial : UMaterialInterface
             }
         }
 
-        void Opacity(bool check, int weight, UTexture tex)
+        void Opacity(bool check, int weight, FPackageIndex tex)
         {
             if (check && weight > opWeight)
             {
@@ -199,7 +172,7 @@ public class UMaterial : UMaterialInterface
             }
         }
 
-        void Emissive(bool check, int weight, UTexture tex)
+        void Emissive(bool check, int weight, FPackageIndex tex)
         {
             if (check && weight > emWeight)
             {
@@ -258,13 +231,12 @@ public class UMaterial : UMaterialInterface
         }
 
         // do not allow normal map became a diffuse
-        if (parameters.Diffuse == parameters.Normal && diffWeight < normWeight ||
-            parameters.Diffuse is { IsTextureCube: true })
+        if (parameters.Diffuse == parameters.Normal && diffWeight < normWeight)
         {
             parameters.Diffuse = null;
         }
     }
-    public override void GetParams(CMaterialParams2 parameters, EMaterialFormat format)
+    public override void GetParams(CMaterialParams2 parameters, EMaterialDepth depth)
     {
         parameters.BlendMode = BlendMode;
         parameters.ShadingModel = ShadingModel;
@@ -295,7 +267,7 @@ public class UMaterial : UMaterialInterface
             }
         }
 
-        if (format != EMaterialFormat.AllLayersNoRef)
+        if (depth != EMaterialDepth.AllLayersNoRef)
         {
             for (int i = 0; i < ReferencedTextures.Count; i++)
             {
@@ -304,8 +276,8 @@ public class UMaterial : UMaterialInterface
             }
         }
 
-        base.GetParams(parameters, format);
-        if (format == EMaterialFormat.AllLayersNoRef) return;
+        base.GetParams(parameters, depth);
+        if (depth == EMaterialDepth.AllLayersNoRef) return;
 
         if (ReferencedTextures.Count == 1 && ReferencedTextures[0] is { } fallback)
         {
@@ -349,24 +321,19 @@ public class UMaterial : UMaterialInterface
                 Regex.IsMatch(texture.Name, CMaterialParams2.RegexEmissive, RegexOptions.IgnoreCase))
             {
                 parameters.Textures[CMaterialParams2.FallbackEmissive] = texture;
-                continue;
             }
         }
     }
 
-    public override void AppendReferencedTextures(IList<UUnrealMaterial> outTextures, bool onlyRendered)
+    public override void AppendReferencedTextures(IList<FPackageIndex> outTextures, bool onlyRendered)
     {
         if (onlyRendered)
         {
             base.AppendReferencedTextures(outTextures, onlyRendered);
         }
-        else
+        else foreach (var texture in ReferencedTextures.OfType<FPackageIndex>().Where(texture => !outTextures.Contains(texture)))
         {
-            foreach (var texture in ReferencedTextures.Where(texture => !outTextures.Contains(texture)))
-            {
-                if (texture == null) continue;
-                outTextures.Add(texture);
-            }
+            outTextures.Add(texture);
         }
     }
 

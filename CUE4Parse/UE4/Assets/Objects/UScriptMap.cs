@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using CUE4Parse.GameTypes.AoC.Objects;
 using CUE4Parse.GameTypes.DaysGone.Assets;
 using CUE4Parse.GameTypes.SOD2.Assets;
@@ -26,9 +24,9 @@ public class UScriptMap
         {
             (tagData.InnerType, tagData.ValueType) = Ar.Game switch
             {
-                EGame.GAME_DaysGone => DaysGoneProperties.GetMapPropertyTypes(tagData.Name),
-                EGame.GAME_StateOfDecay2 => SOD2Properties.GetMapPropertyTypes(tagData.Name),
-                EGame.GAME_WeHappyFew => tagData.Name switch
+                GAME_DaysGone => DaysGoneProperties.GetMapPropertyTypes(tagData.Name),
+                GAME_StateOfDecay2 => SOD2Properties.GetMapPropertyTypes(tagData.Name),
+                GAME_WeHappyFew => tagData.Name switch
                 {
                     "PointMap" or "JunctionMap" or "RoadMap" => ("IntProperty", "StructProperty"),
                     "States" => ("NameProperty", "StructProperty"),
@@ -40,6 +38,12 @@ public class UScriptMap
 
         if (tagData.InnerType == null || tagData.ValueType == null)
             throw new ParserException(Ar, "Can't serialize UScriptMap without key or value type");
+
+        if (Ar.Game is GAME_DeadIsland2)
+        {
+            if (tagData.InnerType is "StructProperty") tagData.InnerTypeData = new FPropertyTag(Ar, false).TagData;
+            if (tagData.ValueType is "StructProperty") tagData.ValueTypeData = new FPropertyTag(Ar, false).TagData;
+        }
 
         if (!Ar.HasUnversionedProperties && tagData.Name is not null && Ar.Versions.MapStructTypes.TryGetValue(tagData.Name, out var mapStructTypes))
         {
@@ -56,7 +60,7 @@ public class UScriptMap
             }
         }
 
-        if (Ar.Game is EGame.GAME_AshesOfCreation && Ar is FAoCDBCReader) Ar.Position += 4;
+        if (Ar.Game is GAME_AshesOfCreation && Ar is FAoCDBCReader) Ar.Position += 4;
 
         var type = readType == ReadType.RAW ? ReadType.RAW : ReadType.MAP;
         var numEntries = Ar.Read<int>();
